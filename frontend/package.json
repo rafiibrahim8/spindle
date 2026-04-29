@@ -1,0 +1,26 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5174",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.1",
+    "@tanstack/solid-query": "^5.62.16",
+    "@tanstack/solid-virtual": "^3.13.0",
+    "date-fns": "^3.6.0",
+    "lucide-solid": "^0.469.0",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vite-plugin-solid": "^2.11.0"
+  }
+}

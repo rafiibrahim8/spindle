@@ -1,0 +1,32 @@
+node_modules/
+dist/
+build/
+.vite/
+.cache/
+
+# Env
+.env
+.env.local
+
+# Backend data (DB and cached art)
+backend/data/music.db
+backend/data/music.db-journal
+backend/data/music.db-wal
+backend/data/music.db-shm
+backend/data/art/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Agent / tooling local state
+.claude/

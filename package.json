@@ -1,0 +1,15 @@
+{
+  "name": "spindle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:backend": "pnpm --filter backend run dev",
+    "dev:frontend": "pnpm --filter frontend run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

@@ -1,0 +1,4 @@
+-- Migration 001: initial schema. Mirrors backend/src/db/schema.sql.
+-- See schema.sql for the canonical declarations; this file exists so that
+-- the migrations directory is not empty and a future migration runner has
+-- a starting point.
