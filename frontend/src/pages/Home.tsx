@@ -1,18 +1,22 @@
+import { useNavigate } from '@solidjs/router';
 import { useQuery } from '@tanstack/solid-query';
 import { Music2, Play } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 import { api } from '../api/client';
+import { AlbumGrid } from '../components/Library/AlbumGrid';
 import { AlbumArt } from '../components/NowPlaying/AlbumArt';
 import { SyncButton } from '../components/Sync/SyncButton';
 import { EmptyState } from '../components/common/EmptyState';
 import { HeartButton } from '../components/common/HeartButton';
 import { PlayingIndicator } from '../components/common/PlayingIndicator';
 import { Spinner } from '../components/common/Spinner';
+import { openAlbum } from '../store/navStore';
 import { usePlayerStore } from '../store/playerStore';
 import type { Track } from '../types';
 
 export function Home() {
   const player = usePlayerStore();
+  const navigate = useNavigate();
   const status = useQuery(() => ({
     queryKey: ['sync-status'],
     queryFn: () => api.getSyncStatus(),
@@ -73,17 +77,7 @@ export function Home() {
       <h2>Quick Pick</h2>
       <Show when={!albums.isLoading} fallback={<Spinner />}>
         <Show when={quickPick().length} fallback={<EmptyState title="No albums yet" description="Run a sync to fill your library." />}>
-          <div class="album-grid">
-            <For each={quickPick()}>{(album) => (
-              <div class="album-card">
-                <AlbumArt artPath={album.artPath} title={album.title} size="lg" />
-                <div class="album-card-meta">
-                  <strong class="truncate">{album.title}</strong>
-                  <span class="truncate muted">{album.artist}</span>
-                </div>
-              </div>
-            )}</For>
-          </div>
+          <AlbumGrid albums={quickPick()} onSelect={(album) => openAlbum(album.id, navigate)} />
         </Show>
       </Show>
       </Show>
