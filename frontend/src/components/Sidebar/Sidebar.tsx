@@ -1,5 +1,4 @@
 import { Album, Heart, Home, ListMusic, Mic2, Music2, Settings as SettingsIcon } from 'lucide-solid';
-import { SyncButton } from '../Sync/SyncButton';
 import { NavLink } from './NavLink';
 
 function SpindleMark() {
@@ -38,7 +37,6 @@ export function Sidebar() {
         <NavLink to="/playlists" icon={<ListMusic    size={18} />}>Playlists</NavLink>
         <NavLink to="/settings"  icon={<SettingsIcon size={18} />}>Settings</NavLink>
       </nav>
-      <SyncButton />
     </aside>
   );
 }

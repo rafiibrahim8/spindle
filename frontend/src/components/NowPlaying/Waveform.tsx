@@ -13,9 +13,33 @@ export function Waveform() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const data = new Uint8Array(BAR_COUNT * 2);
+    // Allocate buffers once — the analyser size is fixed for the life of
+    // the graph (fftSize: 256 → frequencyBinCount: 128). Re-allocating per
+    // frame caused GC churn that contributed to audio stutter under load.
+    let analyserBuffer: Uint8Array<ArrayBuffer> | null = null;
+    const data = new Uint8Array(new ArrayBuffer(BAR_COUNT));
 
-    const draw = () => {
+    // Cache the accent color and re-read it only when it changes (the user
+    // changes theme rarely; reading getComputedStyle on every frame is slow).
+    let accent = '#1ed760';
+    let accentCheckAt = 0;
+    const refreshAccent = (now: number) => {
+      if (now - accentCheckAt < 1000) return;
+      accentCheckAt = now;
+      const next = getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent').trim();
+      if (next) accent = next;
+    };
+
+    const draw = (now: number) => {
+      // Bail when the tab is hidden — the rAF gets throttled to ~1 Hz anyway,
+      // but explicitly returning avoids any canvas / read work on the audio
+      // thread's slot.
+      if (document.hidden) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+
       const analyser = player.getAnalyser();
       const c = canvas!;
       const w = c.clientWidth * devicePixelRatio;
@@ -27,16 +51,18 @@ export function Waveform() {
       ctx.clearRect(0, 0, w, h);
 
       if (analyser) {
-        const buffer = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(buffer);
-        const step = Math.max(1, Math.floor(buffer.length / BAR_COUNT));
-        for (let i = 0; i < BAR_COUNT; i++) data[i] = buffer[i * step] || 0;
+        if (!analyserBuffer || analyserBuffer.length !== analyser.frequencyBinCount) {
+          analyserBuffer = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+        }
+        analyser.getByteFrequencyData(analyserBuffer);
+        const step = Math.max(1, Math.floor(analyserBuffer.length / BAR_COUNT));
+        for (let i = 0; i < BAR_COUNT; i++) data[i] = analyserBuffer[i * step] || 0;
       } else {
         for (let i = 0; i < BAR_COUNT; i++) data[i] = 0;
       }
 
-      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1ed760';
-      const gap = w / BAR_COUNT * 0.2;
+      refreshAccent(now);
+      const gap = (w / BAR_COUNT) * 0.2;
       const barW = w / BAR_COUNT - gap;
 
       for (let i = 0; i < BAR_COUNT; i++) {

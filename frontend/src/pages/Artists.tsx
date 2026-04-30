@@ -120,7 +120,10 @@ export function Artists() {
               when={filteredTracks().length}
               fallback={<EmptyState title="No tracks for this artist" />}
             >
-              <TrackList tracks={filteredTracks()} />
+              <TrackList
+                tracks={filteredTracks()}
+                playQueue={tracks.data?.tracks || []}
+              />
             </Show>
           </Show>
         </Show>

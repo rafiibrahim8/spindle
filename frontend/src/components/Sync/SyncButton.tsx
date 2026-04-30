@@ -89,13 +89,36 @@ export function SyncButton() {
   const startSync = async () => {
     const status = await api
       .getSyncStatus()
-      .catch(() => ({ musicRoot: null, trackCount: 0, activeJobId: null }));
-    const defaultRoot =
-      status.musicRoot ||
-      (import.meta.env.VITE_DEFAULT_MUSIC_ROOT as string | undefined) ||
-      '';
-    const root = window.prompt('Music library root path:', defaultRoot);
-    if (!root) return;
+      .catch(() => ({
+        musicRoot: null,
+        musicRootExists: false,
+        trackCount: 0,
+        activeJobId: null
+      }));
+    const dockerDefault = import.meta.env.VITE_DEFAULT_MUSIC_ROOT as string | undefined;
+    const insideDocker = Boolean(import.meta.env.VITE_IS_INSIDE_DOCKER);
+    const defaultRoot = status.musicRoot || dockerDefault || '';
+
+    // Inside Docker the in-container path (/music) is fixed by the bind mount
+    // and never changes between machines — only the host source does. Skip
+    // the prompt unconditionally and sync against the build-baked default,
+    // even if the DB still remembers a stale path from another machine.
+    //
+    // Otherwise: skip the prompt only when we already have a path AND the
+    // backend confirms it actually exists on disk. If the DB was migrated
+    // to a new box (or the music dir was unmounted), prompt with the old
+    // value pre-filled so the user can correct it. Otherwise sync would
+    // walk an empty tree and mark every track for deletion.
+    let root: string;
+    if (insideDocker && dockerDefault) {
+      root = dockerDefault;
+    } else if (defaultRoot && status.musicRootExists) {
+      root = defaultRoot;
+    } else {
+      const entered = window.prompt('Music library root path:', defaultRoot);
+      if (!entered) return;
+      root = entered;
+    }
 
     setOpen(true);
 

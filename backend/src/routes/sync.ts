@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import express from 'express';
 import { getDb } from '../db/init.js';
 import { createSyncJob, getActiveJobId, getJob } from '../services/sync.js';
@@ -20,8 +21,18 @@ router.get('/status', (_req, res) => {
     .prepare<[string]>('SELECT value FROM settings WHERE key = ?')
     .get('music_root') as { value: string } | undefined;
   const count = db.prepare('SELECT COUNT(*) AS n FROM tracks').get() as { n: number };
+  // Whether the stored music_root actually points at a real directory on this
+  // machine. Lets the frontend distinguish "happy re-sync" from "DB moved
+  // here from a different box and now points at a path that doesn't exist".
+  const musicRootExists = root?.value
+    ? (() => {
+        try { return fs.statSync(root.value).isDirectory(); }
+        catch { return false; }
+      })()
+    : false;
   res.json({
     musicRoot: root?.value ?? null,
+    musicRootExists,
     trackCount: count.n,
     activeJobId: getActiveJobId()
   });

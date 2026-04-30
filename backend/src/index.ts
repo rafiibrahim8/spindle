@@ -19,8 +19,8 @@ import tracksRouter from './routes/tracks.js';
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ART_CACHE_DIR =
-  process.env.ART_CACHE_DIR || path.join(__dirname, '../data/art');
+const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../data');
+const ART_CACHE_DIR = path.join(DATA_ROOT, 'art');
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
 
 const app = express();
@@ -41,10 +41,27 @@ app.use('/api/stream', streamRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/settings', settingsRouter);
 
+// Production: serve the built SPA from the same Express process. Set
+// SPINDLE_FRONTEND_STATIC_DIR=/path/to/frontend/dist in production. In dev,
+// leave it unset — Vite serves the SPA on a separate port and proxies /api.
+const STATIC_DIR = process.env.SPINDLE_FRONTEND_STATIC_DIR;
+if (STATIC_DIR && fs.existsSync(STATIC_DIR)) {
+  app.use(express.static(STATIC_DIR, {
+    maxAge: '7d',         // hashed Vite assets are safe to cache long
+    etag: true,
+    index: false          // we send index.html ourselves via the SPA fallback
+  }));
+  // SPA fallback — any non-asset, non-API path returns index.html so the
+  // SolidJS Router can handle it. Must come AFTER /api/* and /art.
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(STATIC_DIR, 'index.html'));
+  });
+}
+
 app.use(errorHandler);
 
 initDb();
 
 app.listen(PORT, () => {
-  console.log(`🎵 Music Player API running on http://localhost:${PORT}`);
+  console.log(`🎵 Spindle running on http://localhost:${PORT}`);
 });

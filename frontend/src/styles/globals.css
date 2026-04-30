@@ -561,6 +561,29 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 }
 .artist-meta { display: flex; flex-direction: column; }
 
+/* ────────────────────────────────────────────────────────────── Home empty */
+.home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  padding: 56px 24px;
+  margin-top: 32px;
+  background: var(--surface-1);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+}
+.home-empty-mark {
+  width: 64px; height: 64px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.home-empty h2 { margin: 0; font-size: 22px; }
+.home-empty p { max-width: 460px; margin: 0; }
+
 /* ────────────────────────────────────────────────────────────── Home rails */
 .home-page > h1 { font-size: 32px; }
 .rail { display: flex; flex-direction: column; gap: 14px; }

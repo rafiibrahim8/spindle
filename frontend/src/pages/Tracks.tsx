@@ -10,21 +10,28 @@ import { useLibraryStore } from '../store/libraryStore';
 export function Tracks() {
   const [filters, setFilters] = useLibraryStore();
 
+  // Sort/order is part of the query key (server-side). Search is *not* sent
+  // to the server — we filter client-side over the full list so that playing
+  // a search hit can still queue the entire library.
   const tracks = useQuery(() => ({
-    queryKey: ['tracks', { ...filters }],
+    queryKey: ['tracks', { sort: filters.sort, order: filters.order }],
     queryFn: () =>
       api.getTracks({
-        search: filters.search,
-        artist: filters.artist,
-        album: filters.album,
-        genre: filters.genre,
         sort: filters.sort,
         order: filters.order,
         limit: 5000
       })
   }));
 
-  const list = createMemo(() => tracks.data?.tracks || []);
+  const fullList = createMemo(() => tracks.data?.tracks || []);
+
+  const filteredList = createMemo(() => {
+    const q = filters.search.trim().toLowerCase();
+    if (!q) return fullList();
+    return fullList().filter((t) =>
+      [t.title, t.artist, t.album].some((v) => (v || '').toLowerCase().includes(q))
+    );
+  });
 
   return (
     <div class="page tracks-page">
@@ -59,15 +66,21 @@ export function Tracks() {
           </select>
         </div>
       </div>
-      <Show
-        when={!tracks.isLoading}
-        fallback={<Spinner />}
-      >
+      <Show when={!tracks.isLoading} fallback={<Spinner />}>
         <Show
-          when={list().length}
-          fallback={<EmptyState title="No tracks" description="Try syncing your library or adjusting filters." />}
+          when={filteredList().length}
+          fallback={
+            <EmptyState
+              title={fullList().length ? 'No matches' : 'No tracks'}
+              description={
+                fullList().length
+                  ? 'Try a different search.'
+                  : 'Run a sync from Settings to populate your library.'
+              }
+            />
+          }
         >
-          <TrackList tracks={list()} />
+          <TrackList tracks={filteredList()} playQueue={fullList()} />
         </Show>
       </Show>
     </div>

@@ -8,12 +8,9 @@ build/
 .env
 .env.local
 
-# Backend data (DB and cached art)
-backend/data/music.db
-backend/data/music.db-journal
-backend/data/music.db-wal
-backend/data/music.db-shm
-backend/data/art/
+# Backend data — DB lives in db/, cached art in art/
+backend/data
+backend/data
 
 # Logs
 *.log
@@ -31,3 +28,4 @@ Thumbs.db
 
 # Agent / tooling local state
 .claude/
+_DATA/

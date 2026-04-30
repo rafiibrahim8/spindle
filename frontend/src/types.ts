@@ -68,6 +68,7 @@ export interface UserSettings {
 
 export interface SyncStatus {
   musicRoot: string | null;
+  musicRootExists: boolean;
   trackCount: number;
   activeJobId: string | null;
 }

@@ -54,7 +54,10 @@ export function Liked() {
             />
           }
         >
-          <TrackList tracks={filtered()} />
+          <TrackList
+            tracks={filtered()}
+            playQueue={tracks.data?.tracks || []}
+          />
         </Show>
       </Show>
     </div>

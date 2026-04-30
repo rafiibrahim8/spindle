@@ -31,6 +31,21 @@ let lastPositionSaveAt = 0;
 let restoringSession = false;
 let nextPreloadedFor: number | null = null;
 
+/**
+ * Two stacks for reversible prev/next in shuffle mode. `back` holds queue
+ * indices played before the current one (most-recent on top); `forward` holds
+ * tracks the user prev'd away from (so a subsequent next replays them in
+ * order, instead of picking a fresh random).
+ *
+ * Both are cleared when a brand-new queue is set; only `forward` is cleared
+ * when the user jumps to a track within the current queue (e.g. double-click
+ * in the queue panel) — that "jump" invalidates the previously-walked path.
+ */
+let shuffleBack: number[] = [];
+let shuffleForward: number[] = [];
+/** True while next() / prev() is calling setTrack — tells setTrack to leave the forward stack alone. */
+let shufflePathInProgress = false;
+
 interface PersistedPlaybackSession {
   currentTrack: Track | null;
   queue: Track[];
@@ -89,6 +104,8 @@ interface PlayerState extends PlayerStateActions {
   queueIndex: number;
   completedReported: boolean;
   playCounted: boolean;
+  /** Queue indices that have crossed the play-threshold this session; drives the "Played" label in the queue panel. */
+  played: number[];
   showNowPlaying: boolean;
   panelTab: PanelTab;
   equalizer: number[];
@@ -116,6 +133,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   queueIndex: -1,
   completedReported: false,
   playCounted: false,
+  played: [],
   showNowPlaying: false,
   panelTab: 'album',
   equalizer: equalizerPresets.Flat.slice(),
@@ -124,6 +142,20 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   setTrack(track, queue, index = 0) {
     const finalQueue = queue && queue.length ? queue : [track];
     const finalIndex = Math.max(0, Math.min(index, finalQueue.length - 1));
+    // A different queue array means a fresh session — drop both stacks.
+    // Same reference but reached without using next/prev (e.g. queue-panel
+    // double-click) is a "jump" — it invalidates the prev'd-away forward path
+    // but should preserve the back stack so the user can still rewind.
+    // next/prev manage stacks themselves before calling setTrack; the
+    // `_shufflePathInProgress` flag below tells us not to wipe forward in
+    // those cases.
+    if (finalQueue !== playerStore.queue) {
+      shuffleBack = [];
+      shuffleForward = [];
+      setPlayerStore('played', []);
+    } else if (!shufflePathInProgress) {
+      shuffleForward = [];
+    }
     ensureAudioGraph();
     void audioContext?.resume();
     setPlayerStore('audioError', null);
@@ -194,9 +226,17 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
     let nextIndex: number;
     if (shuffle && queue.length > 1) {
-      do {
-        nextIndex = Math.floor(Math.random() * queue.length);
-      } while (nextIndex === queueIndex);
+      // Push current onto the back stack. If the user previously prev'd, the
+      // forward stack holds the path they came from — replay that in order
+      // before picking a fresh random.
+      if (queueIndex >= 0) shuffleBack.push(queueIndex);
+      if (shuffleForward.length > 0) {
+        nextIndex = shuffleForward.pop()!;
+      } else {
+        do {
+          nextIndex = Math.floor(Math.random() * queue.length);
+        } while (nextIndex === queueIndex);
+      }
     } else {
       nextIndex = queueIndex + 1;
       if (nextIndex >= queue.length) {
@@ -209,15 +249,34 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       }
     }
     const track = queue[nextIndex];
-    if (track) playerStore.setTrack(track, queue, nextIndex);
+    if (track) {
+      shufflePathInProgress = true;
+      try { playerStore.setTrack(track, queue, nextIndex); }
+      finally { shufflePathInProgress = false; }
+    }
   },
 
   prev() {
-    const { queue, queueIndex } = playerStore;
+    const { queue, queueIndex, shuffle } = playerStore;
     if (!queue.length) return;
     if (audioEl.currentTime > 3) {
       audioEl.currentTime = 0;
       return;
+    }
+    // Shuffle mode: pop the back stack, push the current onto forward so a
+    // subsequent next() replays the path the user came from. When the back
+    // stack is empty we fall through to the linear branch — typically a
+    // no-op visually since we're at the start of the session.
+    if (shuffle && shuffleBack.length > 0) {
+      const targetIndex = shuffleBack.pop()!;
+      if (queueIndex >= 0) shuffleForward.push(queueIndex);
+      const track = queue[targetIndex];
+      if (track) {
+        shufflePathInProgress = true;
+        try { playerStore.setTrack(track, queue, targetIndex); }
+        finally { shufflePathInProgress = false; }
+        return;
+      }
     }
     const prevIndex = Math.max(0, queueIndex - 1);
     const track = queue[prevIndex];
@@ -354,7 +413,11 @@ function ensureAudioGraph(): void {
   if (audioContext) return;
   try {
     const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-    audioContext = new Ctor();
+    // `latencyHint: 'playback'` asks the browser for a larger audio buffer
+    // (~50–100 ms vs. the 3–10 ms default). For music there's no perceptible
+    // delay but the audio thread can survive CPU contention and background-tab
+    // throttling without underrunning into stutter.
+    audioContext = new Ctor({ latencyHint: 'playback' });
     sourceNode = audioContext.createMediaElementSource(audioEl);
 
     filters = bands.map((freq, i) => {
@@ -474,6 +537,11 @@ audioEl.addEventListener('timeupdate', () => {
     (audioEl.currentTime >= 30 || (duration && audioEl.currentTime / duration >= 0.25))
   ) {
     setPlayerStore('playCounted', true);
+    // Mark this queue index as played so the queue panel labels it correctly.
+    const idx = playerStore.queueIndex;
+    if (idx >= 0 && !playerStore.played.includes(idx)) {
+      setPlayerStore('played', (arr) => [...arr, idx]);
+    }
     void api.recordPlay(playerStore.currentTrack.id).catch(console.error);
   }
 
@@ -672,7 +740,15 @@ export function setupPlaybackSessionPersistence(): () => void {
   const onPageHide = () => savePlaybackSession();
   const onBeforeUnload = () => savePlaybackSession();
   const onVisibility = () => {
-    if (document.visibilityState === 'hidden') savePlaybackSession();
+    if (document.visibilityState === 'hidden') {
+      savePlaybackSession();
+    } else if (document.visibilityState === 'visible') {
+      // Some browsers auto-suspend the AudioContext when the tab is hidden;
+      // resume it on return so playback doesn't sit muted/stuttering.
+      if (audioContext && audioContext.state === 'suspended') {
+        void audioContext.resume();
+      }
+    }
   };
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('beforeunload', onBeforeUnload);

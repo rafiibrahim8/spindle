@@ -8,8 +8,8 @@ import sharp from 'sharp';
 import type { TrackMeta } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ART_CACHE_DIR =
-  process.env.ART_CACHE_DIR || path.join(__dirname, '../../data/art');
+const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../data');
+const ART_CACHE_DIR = path.join(DATA_ROOT, 'art');
 
 const PARTIAL_HASH_BYTES = 64 * 1024;
 

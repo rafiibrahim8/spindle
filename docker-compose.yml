@@ -1,0 +1,15 @@
+services:
+  spindle:
+    build: .
+    image: spindle:latest
+    container_name: spindle
+    restart: unless-stopped
+    ports:
+      - "1990:1990"
+    volumes:
+      # Persistent state (SQLite DB + cached cover art)
+      - "${DATA_ROOT:?DATA_ROOT is required}:/data"
+      # Your music library — mounted read-only so Spindle can never write to
+      # it. The image is built with VITE_DEFAULT_MUSIC_ROOT=/music so Sync
+      # uses this mount automatically; no prompt to fill in.
+      - "${MUSIC_ROOT:?MUSIC_ROOT is required}:/music:ro"

@@ -1,5 +1,3 @@
-import { exec } from 'node:child_process';
-import path from 'node:path';
 import express from 'express';
 import { getDb } from '../db/init.js';
 import { getLyrics } from '../services/lyrics.js';
@@ -122,36 +120,6 @@ router.put('/:id/like', (req, res) => {
     .run(liked ? 1 : 0, liked ? Date.now() : null, id);
   res.json({ id, liked });
 });
-
-router.post('/:id/reveal', (req, res) => {
-  const id = Number(req.params.id);
-  const row = getDb()
-    .prepare<[number]>('SELECT file_path FROM tracks WHERE id = ?')
-    .get(id) as { file_path: string } | undefined;
-  if (!row) {
-    res.status(404).json({ error: 'Track not found' });
-    return;
-  }
-  const dir = path.dirname(row.file_path);
-  const cmd = revealCommand(dir);
-  exec(cmd, (err) => {
-    if (err) {
-      console.warn('[tracks] reveal failed:', err.message);
-      res.status(500).json({ error: 'Could not open file browser' });
-      return;
-    }
-    res.json({ ok: true });
-  });
-});
-
-function revealCommand(dir: string): string {
-  const safe = JSON.stringify(dir);
-  switch (process.platform) {
-    case 'darwin': return `open ${safe}`;
-    case 'win32':  return `explorer ${safe}`;
-    default:       return `xdg-open ${safe}`;
-  }
-}
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;

@@ -53,9 +53,6 @@ export const api = {
   getLyrics(id: number): Promise<Lyrics> {
     return request(`/tracks/${id}/lyrics`);
   },
-  revealTrack(id: number): Promise<{ ok: boolean }> {
-    return request(`/tracks/${id}/reveal`, { method: 'POST' });
-  },
   setTrackLiked(id: number, liked: boolean): Promise<{ id: number; liked: boolean }> {
     return request(`/tracks/${id}/like`, { method: 'PUT', body: JSON.stringify({ liked }) });
   },

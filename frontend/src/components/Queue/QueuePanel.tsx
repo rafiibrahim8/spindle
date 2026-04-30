@@ -1,6 +1,6 @@
 import { useNavigate } from '@solidjs/router';
 import { createVirtualizer } from '@tanstack/solid-virtual';
-import { For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import { AlbumArt } from '../NowPlaying/AlbumArt';
@@ -23,16 +23,28 @@ export function QueueView() {
     overscan: 10
   });
 
-  // Center the active row on first paint so the user lands at "Now" instead of position 0.
-  onMount(() => {
-    if (player.queueIndex >= 0) {
-      virtualizer.scrollToIndex(player.queueIndex, { align: 'center' });
-    }
+  // Keep the now-playing row in view: center it on first paint, and on every
+  // subsequent track change scroll it back into view if the user has scrolled
+  // away. `align: 'auto'` tells the virtualizer to no-op when the row is
+  // already visible — so manual browsing of the queue isn't yanked back.
+  let isFirstScroll = true;
+  createEffect(() => {
+    const idx = player.queueIndex;
+    if (idx < 0 || queue().length === 0) return;
+    // Defer to a microtask so the virtualizer has measured the new row state
+    // (especially right after the queue first populates) before we scroll.
+    queueMicrotask(() => {
+      virtualizer.scrollToIndex(idx, {
+        align: isFirstScroll ? 'center' : 'auto',
+        behavior: isFirstScroll ? 'auto' : 'smooth'
+      });
+      isFirstScroll = false;
+    });
   });
 
   const labelFor = (index: number): string => {
-    if (index < player.queueIndex) return 'Played';
     if (index === player.queueIndex) return 'Now';
+    if (player.played.includes(index)) return 'Played';
     return 'Next';
   };
 

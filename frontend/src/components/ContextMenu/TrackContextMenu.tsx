@@ -52,10 +52,6 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
     openAlbum(props.track.albumId, navigate);
     props.onClose();
   };
-  const reveal = async () => {
-    await api.revealTrack(props.track.id).catch(() => {});
-    props.onClose();
-  };
   const addToPlaylist = async (playlistId: number) => {
     await api.addTrackToPlaylist(playlistId, props.track.id).catch(() => {});
     void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
@@ -94,7 +90,6 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
       </button>
       <button onClick={goToArtist} disabled={!props.track.artistId}>Go to Artist</button>
       <button onClick={goToAlbum} disabled={!props.track.albumId}>Go to Album</button>
-      <button onClick={reveal}>Show in Finder / Explorer</button>
     </div>
     </Portal>
   );

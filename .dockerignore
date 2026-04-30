@@ -1,0 +1,26 @@
+**/node_modules
+**/dist
+**/build
+**/.cache
+**/.vite
+
+# Dev / local
+.env
+.env.local
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS / editors / agent state
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+.claude
+.DS_Store
+
+# Persistent data — never bake into the image
+backend/data
+data
+_DATA/

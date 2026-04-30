@@ -89,7 +89,7 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
 
   // Walk filesystem, decide per-file action, extract metadata as needed.
   const onDisk = new Set<string>();
-  const toAdd: TrackMeta[] = [];
+  let toAdd: TrackMeta[] = [];
   const toUpdate: Array<{ id: number; meta: TrackMeta }> = [];
   // Files that look different by stat but are byte-identical (touched by some
   // other tool). Refresh stat columns only — no parseFile, no tag rewrite.
@@ -155,12 +155,41 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
   }
 
   // Files that exist in DB but no longer on disk → delete.
-  const toDelete: number[] = [];
+  const toDeleteSet = new Set<number>();
   for (const [filePath, info] of existing) {
     if (!onDisk.has(filePath) && !fs.existsSync(filePath)) {
-      toDelete.push(info.id);
+      toDeleteSet.add(info.id);
     }
   }
+
+  // Detect moves: a "new" file whose hash AND size match a "deleted" row is
+  // the same content under a different path. Combining both fingerprints
+  // makes a false-positive match practically impossible (a partial-hash
+  // collision would already need to land on a file with the exact same byte
+  // count). Convert each match into a single UPDATE so play_count, liked,
+  // play_history etc. survive the move instead of being lost to ON DELETE
+  // CASCADE.
+  const fingerprint = (hash: string, size: number) => `${size}:${hash}`;
+  const deletedByFingerprint = new Map<string, number>();
+  for (const info of existing.values()) {
+    if (toDeleteSet.has(info.id)) {
+      deletedByFingerprint.set(fingerprint(info.hash, info.size), info.id);
+    }
+  }
+  const remainingAdds: TrackMeta[] = [];
+  for (const meta of toAdd) {
+    const key = fingerprint(meta.fileHash, meta.fileSize);
+    const matchedId = deletedByFingerprint.get(key);
+    if (matchedId !== undefined) {
+      toUpdate.push({ id: matchedId, meta });
+      toDeleteSet.delete(matchedId);
+      deletedByFingerprint.delete(key);    // each delete consumed at most once
+    } else {
+      remainingAdds.push(meta);
+    }
+  }
+  toAdd = remainingAdds;
+  const toDelete = [...toDeleteSet];
 
   // Persist all changes in a single synchronous transaction.
   emit({
@@ -266,6 +295,7 @@ function updateTrack(id: number, meta: TrackMeta): void {
 
   db.prepare(`
     UPDATE tracks SET
+      file_path = @filePath,
       file_hash = @fileHash,
       file_size = @fileSize,
       file_mtime = @fileMtime,
@@ -289,6 +319,7 @@ function updateTrack(id: number, meta: TrackMeta): void {
     WHERE id = @id
   `).run({
     id,
+    filePath: meta.filePath,
     fileHash: meta.fileHash,
     fileSize: meta.fileSize,
     fileMtime: meta.fileMtime,

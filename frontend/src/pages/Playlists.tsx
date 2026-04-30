@@ -135,7 +135,10 @@ export function Playlists() {
               when={filteredTracks().length}
               fallback={<EmptyState title="No tracks in this playlist" />}
             >
-              <TrackList tracks={filteredTracks()} />
+              <TrackList
+                tracks={filteredTracks()}
+                playQueue={playlistDetail.data?.tracks || []}
+              />
             </Show>
           </Show>
         </Show>
