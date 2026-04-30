@@ -1,5 +1,5 @@
 import { createVirtualizer } from '@tanstack/solid-virtual';
-import { For, createMemo } from 'solid-js';
+import { For, Show, createMemo } from 'solid-js';
 import type { Track } from '../../types';
 import { TrackRow } from './TrackRow';
 
@@ -36,7 +36,10 @@ export function TrackList(props: TrackListProps) {
       <div ref={parent} class="track-list-virtual">
         <div style={{ height: `${totalSize()}px`, position: 'relative', width: '100%' }}>
           <For each={virtualizer.getVirtualItems()}>{(item) => {
-            const track = tracks()[item.index];
+            // Reactively track tracks()[item.index] so optimistic cache patches
+            // (e.g. like toggle) actually flow into the rendered TrackRow. A
+            // captured const would be set once and never update.
+            const trackAt = createMemo(() => tracks()[item.index]);
             return (
               <div
                 style={{
@@ -48,16 +51,20 @@ export function TrackList(props: TrackListProps) {
                   height: `${item.size}px`
                 }}
               >
-                <TrackRow
-                  track={track}
-                  queue={tracks()}
-                  index={item.index}
-                  onPlay={
-                    props.onPlay
-                      ? (t) => props.onPlay!(t, tracks(), item.index)
-                      : undefined
-                  }
-                />
+                <Show when={trackAt()}>
+                  {(track) => (
+                    <TrackRow
+                      track={track()}
+                      queue={tracks()}
+                      index={item.index}
+                      onPlay={
+                        props.onPlay
+                          ? (t) => props.onPlay!(t, tracks(), item.index)
+                          : undefined
+                      }
+                    />
+                  )}
+                </Show>
               </div>
             );
           }}</For>

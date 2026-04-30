@@ -366,7 +366,7 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 }
 .track-list-header {
   display: grid;
-  grid-template-columns: 36px 48px minmax(0, 1.5fr) minmax(0, 1fr) 36px 60px;
+  grid-template-columns: 36px 48px minmax(0, 1.5fr) minmax(0, 1fr) 60px;
   gap: 12px;
   padding: 10px 16px;
   font-size: 12px;
@@ -378,14 +378,17 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 .track-list-virtual { overflow: auto; height: 100%; }
 
 .track-row {
+  position: relative;
   display: grid;
-  grid-template-columns: 36px 48px minmax(0, 1.5fr) minmax(0, 1fr) 36px 60px;
+  grid-template-columns: 36px 48px minmax(0, 1.5fr) minmax(0, 1fr) 60px;
   gap: 12px;
   align-items: center;
   padding: 8px 16px;
   height: 64px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+/* Heart sits inside the title cell next to the meta text — no dedicated grid
+   column, no absolute overlay. The text block shrinks to make room. */
 /* Heart button — shared across track rows, player bar, home cards */
 .like-btn {
   display: inline-flex;
@@ -435,9 +438,22 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 }
 .row-play:hover, .track-row:hover .row-play { color: var(--text); }
 .row-play.is-current { color: var(--accent); }
-.row-meta { display: flex; flex-direction: column; min-width: 0; }
+.row-meta {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.row-meta-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;          /* allow .truncate children to actually clip */
+}
 .row-meta strong { font-size: 14px; }
-.row-meta span { font-size: 12px; }
+.row-meta span,
+.row-meta button.link-text { font-size: 12px; }
 .row-album { font-size: 13px; color: var(--muted); }
 .row-duration { font: 12px var(--font-mono); color: var(--muted); text-align: right; }
 
@@ -487,6 +503,42 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 .album-card-meta { display: flex; flex-direction: column; min-width: 0; }
 .album-card-meta strong { font-size: 14px; }
 .album-card-meta span { font-size: 12px; }
+
+/* ────────────────────────────────────────────────────────────── Playlists */
+.playlist-group-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin: 4px 0 -8px;
+}
+.playlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+.playlist-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: 200ms ease-out;
+  min-width: 0;
+}
+.playlist-card:hover { background: var(--surface-2); transform: translateY(-2px); }
+.playlist-card-icon {
+  width: 48px; height: 48px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.playlist-card-meta { display: flex; flex-direction: column; min-width: 0; }
+.playlist-card-meta strong { font-size: 14px; }
+.playlist-card-meta span { font-size: 12px; }
 
 /* ────────────────────────────────────────────────────────────── Artists list */
 .artist-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
@@ -1059,7 +1111,7 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
     grid-column: 1;
     grid-row: 4;
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     align-items: center;
     height: var(--mobile-nav-height);
     background: rgba(15, 15, 15, 0.96);
@@ -1172,18 +1224,21 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
     grid-template-columns: 1fr;
   }
 
-  /* Track list — drop the album column to fit on phone */
+  /* Track list — drop the album column to fit on phone. Heart no longer has
+     a grid column on any size; it's absolute-positioned over the row. */
   .track-list-header {
-    grid-template-columns: 32px 40px minmax(0, 1fr) 32px 48px;
+    grid-template-columns: 32px 40px minmax(0, 1fr) 48px;
   }
   .track-list-header .col-album { display: none; }
   .track-row {
-    grid-template-columns: 32px 40px minmax(0, 1fr) 32px 48px;
+    grid-template-columns: 32px 40px minmax(0, 1fr) 48px;
     padding: 6px 12px;
     height: 60px;
   }
   .track-row .row-album { display: none; }
-  .row-like { opacity: 1; }                         /* always visible on touch — no hover */
+  .track-row .row-like {
+    opacity: 1;                                     /* always visible on touch — no hover */
+  }
 
   /* Page header — wrap controls under the title */
   .page-header { flex-wrap: wrap; gap: 10px; }

@@ -13,6 +13,7 @@ import { Albums } from './pages/Albums';
 import { Artists } from './pages/Artists';
 import { Home } from './pages/Home';
 import { Liked } from './pages/Liked';
+import { Playlists } from './pages/Playlists';
 import { Settings } from './pages/Settings';
 import { Tracks } from './pages/Tracks';
 import {
@@ -83,6 +84,7 @@ export default function App() {
           <Route path="/albums" component={Albums} />
           <Route path="/artists" component={Artists} />
           <Route path="/liked" component={Liked} />
+          <Route path="/playlists" component={Playlists} />
           <Route path="/settings" component={Settings} />
         </Router>
       </QueryClientProvider>

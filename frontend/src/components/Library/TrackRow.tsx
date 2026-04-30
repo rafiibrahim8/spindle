@@ -54,16 +54,19 @@ export function TrackRow(props: TrackRowProps) {
       </button>
       <AlbumArt artPath={props.track.artPath} title={props.track.album} size="sm" />
       <div class="row-meta">
-        <strong class="truncate">{props.track.title}</strong>
-        <button
-          type="button"
-          class="truncate muted link-text"
-          onClick={onArtistClick}
-          disabled={!props.track.artistId}
-          title="Go to artist"
-        >
-          {props.track.artist}
-        </button>
+        <div class="row-meta-text">
+          <strong class="truncate">{props.track.title}</strong>
+          <button
+            type="button"
+            class="truncate muted link-text"
+            onClick={onArtistClick}
+            disabled={!props.track.artistId}
+            title="Go to artist"
+          >
+            {props.track.artist}
+          </button>
+        </div>
+        <HeartButton track={props.track} class="row-like" />
       </div>
       <button
         type="button"
@@ -74,7 +77,6 @@ export function TrackRow(props: TrackRowProps) {
       >
         {props.track.album}
       </button>
-      <HeartButton track={props.track} class="row-like" />
       <span class="row-duration">{formatDuration(props.track.duration)}</span>
       <Show when={menu()}>
         {(pos) => (

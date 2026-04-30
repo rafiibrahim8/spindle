@@ -88,6 +88,7 @@ interface PlayerState extends PlayerStateActions {
   queue: Track[];
   queueIndex: number;
   completedReported: boolean;
+  playCounted: boolean;
   showNowPlaying: boolean;
   panelTab: PanelTab;
   equalizer: number[];
@@ -114,6 +115,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   queue: [],
   queueIndex: -1,
   completedReported: false,
+  playCounted: false,
   showNowPlaying: false,
   panelTab: 'album',
   equalizer: equalizerPresets.Flat.slice(),
@@ -131,7 +133,8 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       console.error('[player] play() rejected:', err);
       setPlayerStore({ isPlaying: false, audioError: `Playback failed: ${err.message}` });
     });
-    void api.recordPlay(track.id, false).catch(console.error);
+    // Don't count the play yet — wait until the user has actually heard ≥30 s
+    // or 25 % of the track (timeupdate handler below).
     updateMediaSession(track);
     setPlayerStore({
       currentTrack: track,
@@ -140,7 +143,8 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       queueIndex: finalIndex,
       currentTime: 0,
       duration: track.duration || 0,
-      completedReported: false
+      completedReported: false,
+      playCounted: false
     });
     nextPreloadedFor = null;
     savePlaybackSession();
@@ -458,8 +462,24 @@ audioEl.addEventListener('loadedmetadata', () => {
 audioEl.addEventListener('timeupdate', () => {
   setPlayerStore('currentTime', audioEl.currentTime);
 
-  // 80%-completion mark — single-shot per track.
   const duration = audioEl.duration || playerStore.duration;
+
+  // Play-count threshold — once per track session, after ≥ 30 s or 25 % of
+  // duration (whichever comes first). Skipping a track before this point
+  // does not register as a play. Short tracks (e.g. 60 s) still pass via
+  // the percentage gate.
+  if (
+    playerStore.currentTrack &&
+    !playerStore.playCounted &&
+    (audioEl.currentTime >= 30 || (duration && audioEl.currentTime / duration >= 0.25))
+  ) {
+    setPlayerStore('playCounted', true);
+    void api.recordPlay(playerStore.currentTrack.id).catch(console.error);
+  }
+
+  // 80 %-completion mark — single-shot per track. Doesn't bump play_count
+  // (that already happened at the threshold above); just sets completed=1
+  // on the most recent play_history row.
   if (
     playerStore.currentTrack &&
     !playerStore.completedReported &&
@@ -467,7 +487,7 @@ audioEl.addEventListener('timeupdate', () => {
     audioEl.currentTime / duration >= 0.8
   ) {
     setPlayerStore('completedReported', true);
-    void api.recordPlay(playerStore.currentTrack.id, true).catch(console.error);
+    void api.markPlayCompleted(playerStore.currentTrack.id).catch(console.error);
   }
 
   // Throttled position checkpoint.
@@ -625,7 +645,8 @@ export function restorePlaybackSession(): void {
       volume: blob.volume,
       isMuted: blob.isMuted,
       isPlaying: false,        // never auto-play after a refresh
-      completedReported: false
+      completedReported: false,
+      playCounted: false
     });
     updateMediaSession(track);
     preloadNext();

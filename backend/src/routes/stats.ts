@@ -1,6 +1,6 @@
 import express from 'express';
 import { getDb } from '../db/init.js';
-import { recordPlay } from '../services/stats.js';
+import { markPlayCompleted, recordPlay } from '../services/stats.js';
 
 const router = express.Router();
 
@@ -53,12 +53,21 @@ router.get('/recently-added', (req, res) => {
 
 router.post('/play', (req, res) => {
   const trackId = Number(req.body?.trackId);
-  const completed = Boolean(req.body?.completed);
   if (!trackId) {
     res.status(400).json({ error: 'trackId is required' });
     return;
   }
-  recordPlay(trackId, completed);
+  recordPlay(trackId);
+  res.json({ ok: true });
+});
+
+router.post('/play/complete', (req, res) => {
+  const trackId = Number(req.body?.trackId);
+  if (!trackId) {
+    res.status(400).json({ error: 'trackId is required' });
+    return;
+  }
+  markPlayCompleted(trackId);
   res.json({ ok: true });
 });
 

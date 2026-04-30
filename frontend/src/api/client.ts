@@ -87,6 +87,9 @@ export const api = {
   getPlaylists(): Promise<{ playlists: Playlist[] }> {
     return request('/playlists');
   },
+  getPlaylistTracks(id: number): Promise<{ playlist: Playlist; tracks: Track[] }> {
+    return request(`/playlists/${id}`);
+  },
   createPlaylist(name: string): Promise<{ id: number; name: string }> {
     return request('/playlists', { method: 'POST', body: JSON.stringify({ name }) });
   },
@@ -107,10 +110,16 @@ export const api = {
   getRecentlyAdded(limit = 25): Promise<{ tracks: Track[] }> {
     return request(`/stats/recently-added?limit=${limit}`);
   },
-  recordPlay(trackId: number, completed: boolean): Promise<{ ok: boolean }> {
+  recordPlay(trackId: number): Promise<{ ok: boolean }> {
     return request('/stats/play', {
       method: 'POST',
-      body: JSON.stringify({ trackId, completed })
+      body: JSON.stringify({ trackId })
+    });
+  },
+  markPlayCompleted(trackId: number): Promise<{ ok: boolean }> {
+    return request('/stats/play/complete', {
+      method: 'POST',
+      body: JSON.stringify({ trackId })
     });
   },
 
