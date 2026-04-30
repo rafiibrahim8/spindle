@@ -72,6 +72,25 @@ input:focus, select:focus {
 .muted     { color: var(--muted); }
 .truncate  { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* Inline text that's actually a button (artist / album links inside rows). */
+button.link-text {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  display: inline-block;
+  max-width: 100%;
+}
+button.link-text:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link-text:disabled { cursor: default; }
+
 /* ────────────────────────────────────────────────────────────── App shell */
 .app-shell {
   display: grid;
@@ -164,7 +183,7 @@ input:focus, select:focus {
 .player-meta span { font-size: 12px; }
 .player-empty { color: var(--muted); }
 .player-center { display: flex; flex-direction: column; gap: 6px; align-items: center; }
-.player-controls { display: flex; align-items: center; gap: 10px; }
+.player-controls { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .player-right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 
 .ctl {
@@ -381,9 +400,9 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 }
 .like-btn.is-liked,
 .like-btn.always { opacity: 1; }
-.like-btn.is-liked { color: var(--accent); }
+.like-btn.is-liked { color: var(--liked); }
 .like-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-2); transform: scale(1.06); }
-.like-btn.is-liked:hover:not(:disabled) { color: var(--accent); }
+.like-btn.is-liked:hover:not(:disabled) { color: var(--liked-hover); }
 .like-btn:disabled { opacity: 0; pointer-events: none; }
 
 /* Track row — appear on hover */
@@ -569,8 +588,14 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
   flex: 1;
   min-height: 0;
 }
+.now-playing-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;     /* keep clickable buttons content-width */
+  gap: 4px;
+}
 .now-playing-meta h2 { font-size: 22px; margin: 0; }
-.now-playing-meta p { margin: 4px 0 0; }
+.now-playing-meta button.link-text { font-size: 14px; }
 
 .waveform { width: 100%; height: 80px; }
 
@@ -938,14 +963,237 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
   white-space: pre-wrap;
 }
 
-/* ────────────────────────────────────────────────────────────── Mini player */
-@media (max-width: 600px) {
-  .app-shell { grid-template-columns: 1fr; }
+/* ────────────────────────────────────────────────────────────── Mobile only */
+.mobile-nav { display: none; }
+.mobile-play-btn { display: none; }
+.mobile-top-bar { display: none; }
+
+/* ────────────────────────────────────────────────────────────── Mobile layout */
+@media (max-width: 720px) {
+  :root {
+    --player-height: 64px;
+    --mobile-nav-height: 60px;
+    --mobile-top-bar-height: 52px;
+  }
+
+  /* Sidebar → hidden, MobileTopBar at top, MobileNav at bottom. */
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--mobile-top-bar-height) minmax(0, 1fr) var(--player-height) var(--mobile-nav-height);
+    height: 100vh;
+    height: 100dvh;
+  }
+  .app-shell.panel-open {
+    grid-template-columns: 1fr;
+  }
+  /* Match the desktop rule's specificity so panel-open doesn't shift main-content
+     to column 2 (which would auto-create an implicit second grid column and shrink
+     the player bar / mobile nav to half the viewport). */
+  .app-shell.panel-open .main-content {
+    grid-column: 1;
+  }
   .sidebar { display: none; }
-  .main-content { padding: 18px; }
-  .player-bar { grid-template-columns: 1fr auto; padding: 0 14px; }
-  .player-center { display: none; }
-  .player-center .progress-bar { display: none; }
-  .player-right .volume-control { display: none; }
-  .now-playing-panel { width: 100%; }
+
+  /* Top bar */
+  .mobile-top-bar {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    background: rgba(15, 15, 15, 0.92);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border);
+    z-index: 11;
+  }
+  .mobile-top-bar-mark {
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .mobile-top-bar-name {
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+
+  .main-content {
+    grid-column: 1;
+    grid-row: 2;
+    padding: 16px 16px 24px;
+  }
+
+  /* Player bar — slim two-column row above the nav */
+  .player-bar {
+    grid-column: 1;
+    grid-row: 3;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 0 12px;
+    height: var(--player-height);
+  }
+  .player-track { gap: 10px; min-width: 0; }
+  .player-meta strong, .player-meta span { font-size: 12px; }
+  .player-like { width: 28px; height: 28px; }
+  .player-center { display: none; }                 /* full controls block hidden */
+  .player-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-self: end;
+  }
+  /* Inside .player-right on mobile: hide everything except the dedicated mobile play button.
+     Lyrics/Queue/Volume live inside Now Playing on small screens. */
+  .player-right > .ctl:not(.mobile-play-btn),
+  .player-right .volume-control {
+    display: none;
+  }
+  .mobile-play-btn { display: inline-flex; width: 40px; height: 40px; }
+
+  /* Bottom nav */
+  .mobile-nav {
+    grid-column: 1;
+    grid-row: 4;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    align-items: center;
+    height: var(--mobile-nav-height);
+    background: rgba(15, 15, 15, 0.96);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    padding: 0 4px;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    z-index: 12;
+  }
+  .mobile-nav .nav-link {
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 4px;
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.1;
+    text-align: center;
+  }
+  .mobile-nav .nav-link span { font-weight: 600; }
+  .mobile-nav .nav-link.active {
+    color: var(--accent);
+    background: transparent;
+  }
+  .mobile-nav .nav-link:hover { background: transparent; }
+
+  /* Now Playing panel becomes a full-screen overlay. It covers the player bar
+     so we don't see the same track twice; only the bottom nav stays exposed
+     so the user can navigate away. */
+  .now-playing-panel {
+    position: fixed;
+    inset: 0 0 var(--mobile-nav-height) 0;
+    width: 100%;
+    border-left: none;
+    border-radius: 0;
+    z-index: 14;
+  }
+  /* When the panel is open we want the panel + nav only — collapse top-bar,
+     content, and player-bar rows so no layout slot is reserved. The panel
+     itself is position: fixed and covers the entire screen above the nav. */
+  .app-shell.panel-open {
+    grid-template-rows: 0 minmax(0, 1fr) 0 var(--mobile-nav-height);
+  }
+  .app-shell.panel-open .player-bar,
+  .app-shell.panel-open .mobile-top-bar {
+    display: none;
+  }
+
+  /* On mobile the album-mode children rarely fill a tall viewport. Layout:
+       art + title at top, waveform absorbs the leftover middle space, progress
+       and controls anchor at the bottom — same idiom as Spotify's expanded
+       mobile player. */
+  .now-playing-album {
+    gap: 14px;
+    justify-content: flex-start;
+  }
+  .now-playing-album .album-art-xl {
+    max-width: min(74vw, 380px);
+    margin: 0 auto;
+  }
+  .now-playing-meta h2 { font-size: 22px; margin: 0; }
+  .now-playing-meta p  { margin: 2px 0; }
+  .now-playing-album .waveform {
+    flex: 1 1 0;            /* grow to absorb leftover vertical space */
+    min-height: 80px;
+    max-height: 220px;
+    margin-top: 8px;
+  }
+  .now-playing-album .progress-bar { margin-top: 8px; }
+  .now-playing-album .player-controls { margin-bottom: 4px; }
+
+  .queue-panel { /* old fixed queue panel — already removed but defensive */
+    width: 100%;
+    height: 70vh;
+    bottom: calc(var(--player-height) + var(--mobile-nav-height));
+  }
+
+  /* Rails — horizontal scroll instead of grid */
+  .rail-track-grid {
+    grid-template-columns: none;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 12px;
+    padding: 4px 4px 12px;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .rail-track-grid::-webkit-scrollbar { display: none; }
+  .rail-track-grid > .track-card {
+    flex: 0 0 144px;
+    min-width: 0;                /* let truncate clip; otherwise long titles widen the card */
+    scroll-snap-align: start;
+    padding: 10px;
+  }
+  .track-card .truncate {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Album / artist grid — 2-up at narrow widths */
+  .album-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .album-card { padding: 10px; gap: 8px; }
+
+  .artist-list {
+    grid-template-columns: 1fr;
+  }
+
+  /* Track list — drop the album column to fit on phone */
+  .track-list-header {
+    grid-template-columns: 32px 40px minmax(0, 1fr) 32px 48px;
+  }
+  .track-list-header .col-album { display: none; }
+  .track-row {
+    grid-template-columns: 32px 40px minmax(0, 1fr) 32px 48px;
+    padding: 6px 12px;
+    height: 60px;
+  }
+  .track-row .row-album { display: none; }
+  .row-like { opacity: 1; }                         /* always visible on touch — no hover */
+
+  /* Page header — wrap controls under the title */
+  .page-header { flex-wrap: wrap; gap: 10px; }
+  .page-header .search-input { flex: 1 1 100%; max-width: none; }
+  .page h1 { font-size: 24px; }
+
+  /* Settings */
+  .settings-hero h1 { font-size: 28px; }
+  .settings-grid { grid-template-columns: 1fr; }
+
+  /* Sync overlay — fit on small viewports */
+  .sync-card { width: min(380px, 92vw); padding: 20px; }
 }

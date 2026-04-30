@@ -3,6 +3,7 @@ import { Check } from 'lucide-solid';
 import { For } from 'solid-js';
 import { api } from '../api/client';
 import { Equalizer } from '../components/NowPlaying/Equalizer';
+import { SyncButton } from '../components/Sync/SyncButton';
 import { equalizerPresets, usePlayerStore } from '../store/playerStore';
 import type { UserSettings } from '../types';
 
@@ -96,6 +97,12 @@ export function Settings() {
             )}</For>
           </div>
           <Equalizer compact />
+        </section>
+
+        <section class="settings-card settings-sync-card">
+          <h2>Library</h2>
+          <p class="muted">Re-scan your music root to pick up new, modified, or removed files.</p>
+          <SyncButton />
         </section>
       </div>
     </div>

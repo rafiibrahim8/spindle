@@ -5,6 +5,8 @@ import { api } from './api/client';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { NowPlayingPanel } from './components/NowPlaying/NowPlayingPanel';
 import { PlayerBar } from './components/Player/PlayerBar';
+import { MobileNav } from './components/Sidebar/MobileNav';
+import { MobileTopBar } from './components/Sidebar/MobileTopBar';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { Albums } from './pages/Albums';
@@ -62,9 +64,11 @@ function AppShell(props: { children?: JSX.Element }) {
   return (
     <div class={`app-shell ${player.showNowPlaying ? 'panel-open' : ''}`}>
       <Sidebar />
+      <MobileTopBar />
       <main class="main-content">{props.children}</main>
       <PlayerBar />
       <NowPlayingPanel />
+      <MobileNav />
     </div>
   );
 }

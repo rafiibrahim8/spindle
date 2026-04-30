@@ -1,5 +1,7 @@
+import { useNavigate } from '@solidjs/router';
 import { ListMusic, Mic2, Music, X } from 'lucide-solid';
 import { Match, Show, Switch } from 'solid-js';
+import { openAlbum, openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import { Controls } from '../Player/Controls';
 import { ProgressBar } from '../Player/ProgressBar';
@@ -10,8 +12,18 @@ import { Waveform } from './Waveform';
 
 export function NowPlayingPanel() {
   const player = usePlayerStore();
+  const navigate = useNavigate();
   const tabClass = (tab: 'album' | 'lyrics' | 'queue') =>
     player.panelTab === tab ? 'active' : '';
+
+  const goArtist = () => {
+    openArtist(player.currentTrack?.artistId, navigate);
+    player.setShowNowPlaying(false);
+  };
+  const goAlbum = () => {
+    openAlbum(player.currentTrack?.albumId, navigate);
+    player.setShowNowPlaying(false);
+  };
 
   return (
     <Show when={player.showNowPlaying}>
@@ -62,8 +74,22 @@ export function NowPlayingPanel() {
               />
               <div class="now-playing-meta">
                 <h2>{player.currentTrack?.title ?? '—'}</h2>
-                <p>{player.currentTrack?.artist ?? '—'}</p>
-                <p class="muted">{player.currentTrack?.album ?? ''}</p>
+                <button
+                  type="button"
+                  class="link-text"
+                  onClick={goArtist}
+                  disabled={!player.currentTrack?.artistId}
+                >
+                  {player.currentTrack?.artist ?? '—'}
+                </button>
+                <button
+                  type="button"
+                  class="link-text muted"
+                  onClick={goAlbum}
+                  disabled={!player.currentTrack?.albumId}
+                >
+                  {player.currentTrack?.album ?? ''}
+                </button>
               </div>
               <Waveform />
               <ProgressBar />

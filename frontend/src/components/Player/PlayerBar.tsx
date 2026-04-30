@@ -1,5 +1,7 @@
-import { ListMusic, Mic2 } from 'lucide-solid';
+import { useNavigate } from '@solidjs/router';
+import { ListMusic, Mic2, Pause, Play } from 'lucide-solid';
 import { Show } from 'solid-js';
+import { openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import { AlbumArt } from '../NowPlaying/AlbumArt';
 import { HeartButton } from '../common/HeartButton';
@@ -9,8 +11,14 @@ import { VolumeControl } from './VolumeControl';
 
 export function PlayerBar() {
   const player = usePlayerStore();
+  const navigate = useNavigate();
   const hasLyrics = () =>
     Boolean(player.currentTrack?.hasSyncedLyrics || player.currentTrack?.hasUnsyncedLyrics);
+
+  const onArtistClick = (e: MouseEvent) => {
+    e.stopPropagation();
+    openArtist(player.currentTrack?.artistId, navigate);
+  };
 
   return (
     <footer class="player-bar">
@@ -32,7 +40,15 @@ export function PlayerBar() {
             fallback={<span class="player-empty">Nothing playing</span>}
           >
             <strong class="truncate">{player.currentTrack?.title}</strong>
-            <span class="truncate muted">{player.currentTrack?.artist}</span>
+            <button
+              type="button"
+              class="truncate muted link-text"
+              onClick={onArtistClick}
+              disabled={!player.currentTrack?.artistId}
+              title="Go to artist"
+            >
+              {player.currentTrack?.artist}
+            </button>
           </Show>
         </div>
         <Show when={player.currentTrack}>
@@ -72,6 +88,16 @@ export function PlayerBar() {
           <ListMusic size={16} />
         </button>
         <VolumeControl />
+        {/* Mobile-only play/pause — desktop hides this via CSS, since the
+            full Controls block in .player-center already covers playback. */}
+        <button
+          class="ctl ctl-play mobile-play-btn"
+          onClick={() => player.togglePlay()}
+          aria-label={player.isPlaying ? 'Pause' : 'Play'}
+          disabled={!player.currentTrack}
+        >
+          {player.isPlaying ? <Pause size={18} /> : <Play size={18} />}
+        </button>
       </div>
     </footer>
   );

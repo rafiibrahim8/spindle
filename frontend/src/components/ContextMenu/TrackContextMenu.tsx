@@ -4,6 +4,7 @@ import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { api } from '../../api/client';
 import { useLikeToggle } from '../../hooks/useLike';
+import { openAlbum, openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import type { Track } from '../../types';
 
@@ -44,11 +45,11 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
     props.onClose();
   };
   const goToArtist = () => {
-    if (props.track.artistId) navigate(`/artists?focus=${props.track.artistId}`);
+    openArtist(props.track.artistId, navigate);
     props.onClose();
   };
   const goToAlbum = () => {
-    if (props.track.albumId) navigate(`/albums?focus=${props.track.albumId}`);
+    openAlbum(props.track.albumId, navigate);
     props.onClose();
   };
   const reveal = async () => {

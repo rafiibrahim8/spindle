@@ -29,7 +29,6 @@ export function Waveform() {
       if (analyser) {
         const buffer = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(buffer);
-        // Take every Nth bucket so we end up with BAR_COUNT bars.
         const step = Math.max(1, Math.floor(buffer.length / BAR_COUNT));
         for (let i = 0; i < BAR_COUNT; i++) data[i] = buffer[i * step] || 0;
       } else {

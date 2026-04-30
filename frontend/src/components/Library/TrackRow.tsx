@@ -1,5 +1,7 @@
+import { useNavigate } from '@solidjs/router';
 import { Play } from 'lucide-solid';
 import { createSignal, Show } from 'solid-js';
+import { openAlbum, openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import type { Track } from '../../types';
 import { AlbumArt } from '../NowPlaying/AlbumArt';
@@ -16,9 +18,20 @@ export interface TrackRowProps {
 
 export function TrackRow(props: TrackRowProps) {
   const player = usePlayerStore();
+  const navigate = useNavigate();
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
 
   const isCurrent = () => player.currentTrack?.id === props.track.id;
+
+  const stop = (e: MouseEvent) => { e.stopPropagation(); e.preventDefault(); };
+  const onArtistClick = (e: MouseEvent) => {
+    stop(e);
+    openArtist(props.track.artistId, navigate);
+  };
+  const onAlbumClick = (e: MouseEvent) => {
+    stop(e);
+    openAlbum(props.track.albumId, navigate);
+  };
 
   const play = () => {
     if (props.onPlay) props.onPlay(props.track);
@@ -42,9 +55,25 @@ export function TrackRow(props: TrackRowProps) {
       <AlbumArt artPath={props.track.artPath} title={props.track.album} size="sm" />
       <div class="row-meta">
         <strong class="truncate">{props.track.title}</strong>
-        <span class="truncate muted">{props.track.artist}</span>
+        <button
+          type="button"
+          class="truncate muted link-text"
+          onClick={onArtistClick}
+          disabled={!props.track.artistId}
+          title="Go to artist"
+        >
+          {props.track.artist}
+        </button>
       </div>
-      <span class="row-album truncate">{props.track.album}</span>
+      <button
+        type="button"
+        class="row-album truncate link-text"
+        onClick={onAlbumClick}
+        disabled={!props.track.albumId}
+        title="Go to album"
+      >
+        {props.track.album}
+      </button>
       <HeartButton track={props.track} class="row-like" />
       <span class="row-duration">{formatDuration(props.track.duration)}</span>
       <Show when={menu()}>

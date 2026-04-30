@@ -6,7 +6,7 @@ import { ArtistList } from '../components/Library/ArtistList';
 import { TrackList } from '../components/Library/TrackList';
 import { EmptyState } from '../components/common/EmptyState';
 import { Spinner } from '../components/common/Spinner';
-import { getNavClick } from '../store/navStore';
+import { clearPendingArtistId, getNavClick, getPendingArtistId } from '../store/navStore';
 import type { Artist } from '../types';
 
 export function Artists() {
@@ -24,6 +24,23 @@ export function Artists() {
   });
 
   const artists = useQuery(() => ({ queryKey: ['artists'], queryFn: api.getArtists }));
+
+  // Consume cross-page "open artist X" intents (e.g. context menu, clickable
+  // artist names elsewhere in the app).
+  createEffect(() => {
+    const id = getPendingArtistId();
+    if (id == null) return;
+    const list = artists.data?.artists;
+    if (!list) return;             // wait for the list to load, effect re-runs when it does
+    const artist = list.find((a) => a.id === id);
+    if (artist) {
+      setActive(artist);
+      clearPendingArtistId();
+    } else {
+      // Unknown id — clear so we don't loop.
+      clearPendingArtistId();
+    }
+  });
 
   const tracks = useQuery(() => ({
     queryKey: ['artist-tracks', active()?.id],

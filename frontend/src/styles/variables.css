@@ -8,6 +8,8 @@
   --muted: #b3b3b3;
   --border: rgba(255, 255, 255, 0.08);
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --liked: #f43f5e;
+  --liked-hover: #fb7185;
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 18px;

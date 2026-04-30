@@ -27,6 +27,7 @@ Thumbs.db
 # Editors
 .vscode/
 .idea/
+.ignore/
 
 # Agent / tooling local state
 .claude/

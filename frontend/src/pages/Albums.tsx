@@ -6,7 +6,7 @@ import { AlbumGrid } from '../components/Library/AlbumGrid';
 import { TrackList } from '../components/Library/TrackList';
 import { EmptyState } from '../components/common/EmptyState';
 import { Spinner } from '../components/common/Spinner';
-import { getNavClick } from '../store/navStore';
+import { clearPendingAlbumId, getNavClick, getPendingAlbumId } from '../store/navStore';
 import type { Album } from '../types';
 
 export function Albums() {
@@ -26,6 +26,21 @@ export function Albums() {
     queryFn: () => api.getAlbumTracks(active()!.id),
     enabled: Boolean(active())
   }));
+
+  // Consume cross-page "open album X" intents.
+  createEffect(() => {
+    const id = getPendingAlbumId();
+    if (id == null) return;
+    const list = albums.data?.albums;
+    if (!list) return;
+    const album = list.find((a) => a.id === id);
+    if (album) {
+      setActive(album);
+      clearPendingAlbumId();
+    } else {
+      clearPendingAlbumId();
+    }
+  });
 
   const filtered = createMemo(() => {
     const q = search().trim().toLowerCase();

@@ -1,5 +1,7 @@
+import { useNavigate } from '@solidjs/router';
 import { createVirtualizer } from '@tanstack/solid-virtual';
 import { For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import { AlbumArt } from '../NowPlaying/AlbumArt';
 import { PlayingIndicator } from '../common/PlayingIndicator';
@@ -8,6 +10,7 @@ const ROW_HEIGHT = 56;
 
 export function QueueView() {
   const player = usePlayerStore();
+  const navigate = useNavigate();
   const [dragging, setDragging] = createSignal<number | null>(null);
   let scrollEl: HTMLDivElement | undefined;
 
@@ -76,7 +79,18 @@ export function QueueView() {
                   <AlbumArt artPath={track.artPath} title={track.album} size="sm" />
                   <div class="queue-meta">
                     <strong class="truncate">{track.title}</strong>
-                    <span class="truncate muted">{track.artist}</span>
+                    <button
+                      type="button"
+                      class="truncate muted link-text"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openArtist(track.artistId, navigate);
+                        player.setShowNowPlaying(false);
+                      }}
+                      disabled={!track.artistId}
+                    >
+                      {track.artist}
+                    </button>
                   </div>
                   <span class="queue-status">
                     <Show when={track.id === player.currentTrack?.id}>

@@ -70,6 +70,7 @@ interface PlayerStateActions {
   getAnalyser: () => AnalyserNode | null;
   saveSession: () => void;
   refreshCurrentTrack: () => void;
+  patchCurrentTrack: (id: number, patch: Partial<Track>) => void;
 }
 
 export type PanelTab = 'album' | 'lyrics' | 'queue';
@@ -329,6 +330,11 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     const id = playerStore.currentTrack?.id;
     if (typeof id !== 'number') return;
     refreshCurrentTrackMetadata(id);
+  },
+
+  patchCurrentTrack(id, patch) {
+    if (playerStore.currentTrack?.id !== id) return;
+    setPlayerStore('currentTrack', (t) => (t ? { ...t, ...patch } : t));
   }
 });
 
