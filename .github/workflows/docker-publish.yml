@@ -1,0 +1,82 @@
+name: Build and Publish Docker Image
+
+# Releases are tag-driven only: push a tag matching the package.json version
+# (with or without a leading "v") and this builds linux/amd64 + linux/arm64
+# images and publishes ghcr.io/<owner>/spindle:<version> and :latest.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The tag is the single source of truth for the release version; refuse
+      # to build if frontend/backend package.json disagree with it (or with
+      # each other) so an image version can never lie about its contents.
+      - name: Verify package versions match the tag
+        id: version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          frontend_version=$(node -p "require('./frontend/package.json').version")
+          backend_version=$(node -p "require('./backend/package.json').version")
+          echo "tag: $tag_version | frontend: $frontend_version | backend: $backend_version"
+          if [ "$frontend_version" != "$backend_version" ]; then
+            echo "::error::frontend ($frontend_version) and backend ($backend_version) package.json versions do not match"
+            exit 1
+          fi
+          if [ "$tag_version" != "$frontend_version" ]; then
+            echo "::error::tag version ($tag_version) does not match package.json version ($frontend_version)"
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Spindle
+            org.opencontainers.image.description=Self-hosted music player
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Native modules (better-sqlite3, sharp) compile under QEMU for
+          # arm64 — layer caching across releases keeps that bearable.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
