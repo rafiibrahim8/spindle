@@ -1,4 +1,4 @@
--- Migration 001: initial schema. Mirrors backend/src/db/schema.sql.
--- See schema.sql for the canonical declarations; this file exists so that
--- the migrations directory is not empty and a future migration runner has
--- a starting point.
+-- Migration 001: initial schema baseline (no-op). schema.sql is idempotent
+-- and is executed on every startup, so the initial schema needs no DDL here;
+-- this file just establishes user_version = 1 as the migration starting
+-- point. Future migrations go in 002_*.sql and up.

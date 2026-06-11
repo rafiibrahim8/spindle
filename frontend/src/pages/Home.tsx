@@ -1,7 +1,7 @@
 import { useNavigate } from '@solidjs/router';
 import { useQuery } from '@tanstack/solid-query';
 import { Music2, Play } from 'lucide-solid';
-import { For, Show } from 'solid-js';
+import { For, Show, createMemo } from 'solid-js';
 import { api } from '../api/client';
 import { AlbumGrid } from '../components/Library/AlbumGrid';
 import { AlbumArt } from '../components/NowPlaying/AlbumArt';
@@ -39,10 +39,16 @@ export function Home() {
     queryFn: () => api.getAlbums()
   }));
 
-  const quickPick = () => {
-    const list = albums.data?.albums || [];
-    return [...list].sort(() => Math.random() - 0.5).slice(0, 6);
-  };
+  // Memoized so every reader sees the same pick — a plain function would
+  // re-randomize on each reactive read. Fisher–Yates for an unbiased shuffle.
+  const quickPick = createMemo(() => {
+    const shuffled = [...(albums.data?.albums || [])];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled.slice(0, 6);
+  });
 
   const playTrack = (queue: Track[], index: number) => {
     player.setTrack(queue[index], queue, index);

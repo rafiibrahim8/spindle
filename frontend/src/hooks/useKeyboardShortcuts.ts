@@ -10,6 +10,7 @@ export function useKeyboardShortcuts(): void {
       if (target && (
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
         target.isContentEditable
       )) return;
 
@@ -24,9 +25,15 @@ export function useKeyboardShortcuts(): void {
         return;
       }
 
+      // Leave every other browser/OS combo alone (Ctrl+R reload, Cmd+L
+      // address bar, …) — bare keys only beyond this point.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
       switch (event.key) {
         case ' ':
         case 'Spacebar':
+          // A focused button should activate on Space, not toggle playback.
+          if (target?.tagName === 'BUTTON') return;
           event.preventDefault();
           player.togglePlay();
           return;
@@ -34,10 +41,14 @@ export function useKeyboardShortcuts(): void {
           event.preventDefault();
           audioEl.currentTime = Math.max(0, audioEl.currentTime - 5);
           return;
-        case 'ArrowRight':
+        case 'ArrowRight': {
           event.preventDefault();
-          audioEl.currentTime = Math.min(player.duration || audioEl.duration, audioEl.currentTime + 5);
+          const limit = player.duration || audioEl.duration;
+          if (Number.isFinite(limit) && limit > 0) {
+            audioEl.currentTime = Math.min(limit, audioEl.currentTime + 5);
+          }
           return;
+        }
         case 'ArrowUp':
           event.preventDefault();
           player.setVolume(Math.min(1, player.volume + 0.05));

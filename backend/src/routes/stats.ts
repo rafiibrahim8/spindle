@@ -57,6 +57,13 @@ router.post('/play', (req, res) => {
     res.status(400).json({ error: 'trackId is required' });
     return;
   }
+  const exists = getDb()
+    .prepare<[number]>('SELECT 1 FROM tracks WHERE id = ?')
+    .get(trackId);
+  if (!exists) {
+    res.status(404).json({ error: 'Track not found' });
+    return;
+  }
   recordPlay(trackId);
   res.json({ ok: true });
 });

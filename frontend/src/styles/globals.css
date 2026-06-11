@@ -755,8 +755,13 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
   color: var(--accent);
 }
 .playing-indicator span {
-  width: 3px; min-height: 4px; border-radius: 999px;
+  width: 3px; height: 17px; border-radius: 999px;
   background: currentColor; opacity: .95;
+  /* Animate scaleY instead of height so playback doesn't force continuous
+     layout; bars are bottom-aligned, so scaling from the bottom looks the
+     same as growing in height. */
+  transform: scaleY(0.41);
+  transform-origin: bottom;
   animation: playingBars 780ms ease-in-out infinite;
 }
 .playing-indicator span:nth-child(2) { animation-delay: 110ms; }
@@ -764,13 +769,12 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
 .playing-indicator span:nth-child(4) { animation-delay: 330ms; }
 .playing-indicator:not(.active) span {
   animation-play-state: paused;
-  height: 7px;
   opacity: .55;
 }
 @keyframes playingBars {
-  0%, 100% { height: 5px; }
-  35%      { height: 17px; }
-  65%      { height: 9px; }
+  0%, 100% { transform: scaleY(0.3); }  /* ≈ 5px */
+  35%      { transform: scaleY(1); }    /* 17px */
+  65%      { transform: scaleY(0.53); } /* ≈ 9px */
 }
 
 /* ────────────────────────────────────────────────────────────── Queue tab */

@@ -23,6 +23,15 @@ export function Waveform() {
     // changes theme rarely; reading getComputedStyle on every frame is slow).
     let accent = '#1ed760';
     let accentCheckAt = 0;
+
+    // One shared full-height gradient, rebuilt only when the canvas height or
+    // accent changes. Creating 64 per-bar gradients every frame (~11k
+    // allocations/s) was GC churn of the same kind that caused audio stutter
+    // before. Anchoring to the canvas instead of each bar means taller bars
+    // reach further into the bright end — visually equivalent.
+    let gradient: CanvasGradient | null = null;
+    let gradientH = 0;
+    let gradientAccent = '';
     const refreshAccent = (now: number) => {
       if (now - accentCheckAt < 1000) return;
       accentCheckAt = now;
@@ -62,6 +71,15 @@ export function Waveform() {
       }
 
       refreshAccent(now);
+      if (!gradient || gradientH !== h || gradientAccent !== accent) {
+        gradient = ctx.createLinearGradient(0, 0, 0, h);
+        gradient.addColorStop(0, accent);
+        gradient.addColorStop(1, accent + '55');
+        gradientH = h;
+        gradientAccent = accent;
+      }
+      ctx.fillStyle = gradient;
+
       const gap = (w / BAR_COUNT) * 0.2;
       const barW = w / BAR_COUNT - gap;
 
@@ -69,12 +87,7 @@ export function Waveform() {
         const v = data[i] / 255;
         const barH = Math.max(2 * devicePixelRatio, v * h);
         const x = i * (barW + gap);
-        const y = h - barH;
-        const grad = ctx.createLinearGradient(0, y, 0, h);
-        grad.addColorStop(0, accent);
-        grad.addColorStop(1, accent + '55');
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, y, barW, barH);
+        ctx.fillRect(x, h - barH, barW, barH);
       }
 
       raf = requestAnimationFrame(draw);

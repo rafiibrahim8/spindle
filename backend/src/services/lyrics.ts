@@ -1,4 +1,5 @@
 import type { Database } from 'better-sqlite3';
+import { prepared } from '../db/init.js';
 
 export interface LyricsRow {
   trackId: number;
@@ -7,7 +8,7 @@ export interface LyricsRow {
 }
 
 export function upsertLyrics(db: Database, row: LyricsRow): void {
-  const stmt = db.prepare(`
+  const stmt = prepared(db, `
     INSERT INTO lyrics(track_id, synced_lrc, unsynced_text)
     VALUES (@trackId, @syncedLrc, @unsyncedText)
     ON CONFLICT(track_id) DO UPDATE SET

@@ -52,8 +52,14 @@ if (STATIC_DIR && fs.existsSync(STATIC_DIR)) {
     index: false          // we send index.html ourselves via the SPA fallback
   }));
   // SPA fallback — any non-asset, non-API path returns index.html so the
-  // SolidJS Router can handle it. Must come AFTER /api/* and /art.
-  app.get('*', (_req, res) => {
+  // SolidJS Router can handle it. Must come AFTER /api/* and /art. Unknown
+  // API/art paths get a JSON 404 — serving index.html there would mask
+  // typos and break clients expecting JSON.
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/art/')) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
     res.sendFile(path.join(STATIC_DIR, 'index.html'));
   });
 }

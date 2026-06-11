@@ -4,15 +4,15 @@ import { getDb } from '../db/init.js';
 const router = express.Router();
 
 router.get('/', (_req, res) => {
+  // Correlated subqueries instead of a double LEFT JOIN: joining albums and
+  // tracks together builds an albums×tracks cartesian intermediate per
+  // artist before COUNT(DISTINCT) collapses it again.
   const rows = getDb()
     .prepare(`
       SELECT ar.id, ar.name,
-             COUNT(DISTINCT al.id) AS album_count,
-             COUNT(DISTINCT t.id)  AS track_count
+             (SELECT COUNT(*) FROM albums al WHERE al.artist_id = ar.id) AS album_count,
+             (SELECT COUNT(*) FROM tracks t  WHERE t.artist_id  = ar.id) AS track_count
       FROM artists ar
-      LEFT JOIN albums al ON al.artist_id = ar.id
-      LEFT JOIN tracks t  ON t.artist_id  = ar.id
-      GROUP BY ar.id
       ORDER BY ar.name COLLATE NOCASE
     `)
     .all();

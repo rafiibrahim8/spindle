@@ -2,13 +2,25 @@ import { createStore, produce } from 'solid-js/store';
 import { api } from '../api/client';
 import type { Track } from '../types';
 
-export const audioEl = new Audio();
-audioEl.preload = 'metadata';
-audioEl.crossOrigin = 'anonymous';
+function createAudioElement(): HTMLAudioElement {
+  const el = new Audio();
+  el.preload = 'auto';
+  el.crossOrigin = 'anonymous';
+  attachAudioElementListeners(el);
+  return el;
+}
 
-const nextAudioEl = new Audio();
-nextAudioEl.preload = 'auto';
-nextAudioEl.crossOrigin = 'anonymous';
+/**
+ * Two audio elements that trade roles: `audioEl` is always the active one,
+ * `nextAudioEl` preloads the upcoming track. When playback advances to the
+ * preloaded track, the elements swap instead of re-fetching — the buffered
+ * data is used directly, so the transition is (near-)gapless.
+ *
+ * `audioEl` is an `export let` on purpose: ES-module live bindings mean
+ * importers always see the currently-active element after a swap.
+ */
+export let audioEl = createAudioElement();
+let nextAudioEl = createAudioElement();
 
 const bands = [60, 250, 1000, 4000, 16000];
 
@@ -23,13 +35,20 @@ export const equalizerPresets: Record<string, number[]> = {
 let audioContext: AudioContext | null = null;
 let analyserNode: AnalyserNode | null = null;
 let filters: BiquadFilterNode[] = [];
-let sourceNode: MediaElementAudioSourceNode | null = null;
+const sourceNodes = new Map<HTMLAudioElement, MediaElementAudioSourceNode>();
 
 const PLAYBACK_SESSION_KEY = 'music-player:playback-session';
+const PLAYBACK_QUEUE_KEY = 'music-player:playback-queue';
 const POSITION_SAVE_INTERVAL_MS = 10_000;
 let lastPositionSaveAt = 0;
 let restoringSession = false;
 let nextPreloadedFor: number | null = null;
+/**
+ * The queue is persisted under its own localStorage key and only re-serialized
+ * when it actually changes — JSON.stringify of a multi-thousand-track queue on
+ * every 10 s position checkpoint was a measurable main-thread stall.
+ */
+let queueDirty = true;
 
 /**
  * Two stacks for reversible prev/next in shuffle mode. `back` holds queue
@@ -140,6 +159,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   equalizerPreset: 'Flat',
 
   setTrack(track, queue, index = 0) {
+    cancelPendingRestoreSeek();
     const finalQueue = queue && queue.length ? queue : [track];
     const finalIndex = Math.max(0, Math.min(index, finalQueue.length - 1));
     // A different queue array means a fresh session — drop both stacks.
@@ -153,18 +173,30 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       shuffleBack = [];
       shuffleForward = [];
       setPlayerStore('played', []);
+      queueDirty = true;
     } else if (!shufflePathInProgress) {
       shuffleForward = [];
     }
     ensureAudioGraph();
     void audioContext?.resume();
     setPlayerStore('audioError', null);
-    audioEl.src = api.streamUrl(track.id);
+    if (nextPreloadedFor === track.id && nextAudioEl.src) {
+      // The preload element already holds this track's buffered data — swap
+      // roles instead of re-fetching from byte 0 (near-gapless transition).
+      const previous = audioEl;
+      previous.pause();
+      audioEl = nextAudioEl;
+      nextAudioEl = previous;
+      nextAudioEl.removeAttribute('src');
+      nextAudioEl.load();    // drop the old track's buffer
+      if (audioEl.currentTime > 0) {
+        try { audioEl.currentTime = 0; } catch {}
+      }
+    } else {
+      audioEl.src = api.streamUrl(track.id);
+    }
     audioEl.volume = playerStore.isMuted ? 0 : playerStore.volume;
-    audioEl.play().catch((err: Error) => {
-      console.error('[player] play() rejected:', err);
-      setPlayerStore({ isPlaying: false, audioError: `Playback failed: ${err.message}` });
-    });
+    startPlayback();
     // Don't count the play yet — wait until the user has actually heard ≥30 s
     // or 25 % of the track (timeupdate handler below).
     updateMediaSession(track);
@@ -188,10 +220,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     ensureAudioGraph();
     void audioContext?.resume();
     setPlayerStore('audioError', null);
-    audioEl.play().catch((err: Error) => {
-      console.error('[player] play() rejected:', err);
-      setPlayerStore({ isPlaying: false, audioError: `Playback failed: ${err.message}` });
-    });
+    startPlayback();
     setPlayerStore('isPlaying', true);
     savePlaybackSession();
   },
@@ -209,6 +238,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   seek(time) {
     if (!Number.isFinite(time)) return;
+    cancelPendingRestoreSeek();    // a manual scrub outranks the restored position
     audioEl.currentTime = Math.max(0, time);
     setPlayerStore('currentTime', audioEl.currentTime);
     savePlaybackSession();
@@ -229,7 +259,12 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       // Push current onto the back stack. If the user previously prev'd, the
       // forward stack holds the path they came from — replay that in order
       // before picking a fresh random.
-      if (queueIndex >= 0) shuffleBack.push(queueIndex);
+      if (queueIndex >= 0) {
+        shuffleBack.push(queueIndex);
+        // A repeat-all shuffle session runs indefinitely — keep the rewind
+        // history bounded.
+        if (shuffleBack.length > 500) shuffleBack.splice(0, shuffleBack.length - 500);
+      }
       if (shuffleForward.length > 0) {
         nextIndex = shuffleForward.pop()!;
       } else {
@@ -280,7 +315,13 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     }
     const prevIndex = Math.max(0, queueIndex - 1);
     const track = queue[prevIndex];
-    if (track) playerStore.setTrack(track, queue, prevIndex);
+    if (track) {
+      // Guard the forward stack here too: in shuffle with an exhausted back
+      // stack this linear fallback must not wipe a replayable forward path.
+      shufflePathInProgress = true;
+      try { playerStore.setTrack(track, queue, prevIndex); }
+      finally { shufflePathInProgress = false; }
+    }
   },
 
   toggleShuffle() {
@@ -310,6 +351,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   addToQueue(track) {
     setPlayerStore('queue', (q) => [...q, track]);
+    queueDirty = true;
     savePlaybackSession();
   },
 
@@ -319,11 +361,20 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       if (to < 0 || to >= state.queue.length) return;
       const [moved] = state.queue.splice(from, 1);
       state.queue.splice(to, 0, moved);
-      // Keep queueIndex tracking the current track.
-      if (state.queueIndex === from) state.queueIndex = to;
-      else if (from < state.queueIndex && to >= state.queueIndex) state.queueIndex--;
-      else if (from > state.queueIndex && to <= state.queueIndex) state.queueIndex++;
+      // Every index-based structure must follow the move: queueIndex, the
+      // played set, and the shuffle history stacks all point into the queue.
+      const remap = (i: number): number => {
+        if (i === from) return to;
+        if (from < i && to >= i) return i - 1;
+        if (from > i && to <= i) return i + 1;
+        return i;
+      };
+      state.queueIndex = remap(state.queueIndex);
+      state.played = state.played.map(remap);
+      shuffleBack = shuffleBack.map(remap);
+      shuffleForward = shuffleForward.map(remap);
     }));
+    queueDirty = true;
     savePlaybackSession();
   },
 
@@ -398,6 +449,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   patchCurrentTrack(id, patch) {
     if (playerStore.currentTrack?.id !== id) return;
     setPlayerStore('currentTrack', (t) => (t ? { ...t, ...patch } : t));
+    patchQueueTrack(id, patch);
   }
 });
 
@@ -405,43 +457,73 @@ export function usePlayerStore() {
   return playerStore;
 }
 
+function startPlayback(): void {
+  const el = audioEl;
+  el.preload = 'auto';    // restore loads metadata-only; real playback buffers ahead
+  el.play().catch((err: Error) => {
+    // A newer load/pause interrupting play() rejects with AbortError — that's
+    // the normal rapid-skip flow, not a failure. And if the element was
+    // swapped out meanwhile, the rejection belongs to a dead track.
+    if (err.name === 'AbortError' || el !== audioEl) return;
+    console.error('[player] play() rejected:', err);
+    setPlayerStore({ isPlaying: false, audioError: `Playback failed: ${err.message}` });
+  });
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Audio graph — built lazily on first play (browsers require a user gesture).
 // ────────────────────────────────────────────────────────────────────────
 
 function ensureAudioGraph(): void {
-  if (audioContext) return;
-  try {
-    const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-    // `latencyHint: 'playback'` asks the browser for a larger audio buffer
-    // (~50–100 ms vs. the 3–10 ms default). For music there's no perceptible
-    // delay but the audio thread can survive CPU contention and background-tab
-    // throttling without underrunning into stutter.
-    audioContext = new Ctor({ latencyHint: 'playback' });
-    sourceNode = audioContext.createMediaElementSource(audioEl);
+  if (!audioContext) {
+    try {
+      const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+      // `latencyHint: 'playback'` asks the browser for a larger audio buffer
+      // (~50–100 ms vs. the 3–10 ms default). For music there's no perceptible
+      // delay but the audio thread can survive CPU contention and background-tab
+      // throttling without underrunning into stutter.
+      audioContext = new Ctor({ latencyHint: 'playback' });
 
-    filters = bands.map((freq, i) => {
-      const filter = audioContext!.createBiquadFilter();
-      filter.type = 'peaking';
-      filter.frequency.value = freq;
-      filter.Q.value = 1.1;
-      filter.gain.value = playerStore.equalizer[i] || 0;
-      return filter;
-    });
+      filters = bands.map((freq, i) => {
+        const filter = audioContext!.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.1;
+        filter.gain.value = playerStore.equalizer[i] || 0;
+        return filter;
+      });
 
-    analyserNode = audioContext.createAnalyser();
-    analyserNode.fftSize = 256;
-    analyserNode.smoothingTimeConstant = 0.82;
+      analyserNode = audioContext.createAnalyser();
+      analyserNode.fftSize = 256;
+      analyserNode.smoothingTimeConstant = 0.82;
 
-    let head: AudioNode = sourceNode;
-    for (const filter of filters) {
-      head.connect(filter);
-      head = filter;
+      let head: AudioNode = filters[0];
+      for (let i = 1; i < filters.length; i++) {
+        head.connect(filters[i]);
+        head = filters[i];
+      }
+      head.connect(analyserNode);
+      analyserNode.connect(audioContext.destination);
+    } catch (err) {
+      console.warn('[player] Web Audio init failed:', (err as Error).message);
+      return;
     }
-    head.connect(analyserNode);
-    analyserNode.connect(audioContext.destination);
+  }
+  // Both elements feed the same filter chain; the inactive one is paused and
+  // therefore silent. An element can only ever have one MediaElementSource,
+  // so each gets exactly one for its lifetime.
+  connectElementSource(audioEl);
+  connectElementSource(nextAudioEl);
+}
+
+function connectElementSource(el: HTMLAudioElement): void {
+  if (!audioContext || sourceNodes.has(el)) return;
+  try {
+    const source = audioContext.createMediaElementSource(el);
+    source.connect(filters[0] ?? audioContext.destination);
+    sourceNodes.set(el, source);
   } catch (err) {
-    console.warn('[player] Web Audio init failed:', (err as Error).message);
+    console.warn('[player] media source connect failed:', (err as Error).message);
   }
 }
 
@@ -514,124 +596,164 @@ function updateMediaPositionState(force = false): void {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Audio element listeners
+// Audio element listeners — attached to BOTH elements at creation. Every
+// handler bails unless its element is currently the active `audioEl`:
+// the preload element and a just-swapped-out element still emit events
+// (pause on swap, loadedmetadata on preload) that must not touch state.
 // ────────────────────────────────────────────────────────────────────────
 
-audioEl.addEventListener('loadedmetadata', () => {
-  setPlayerStore('duration', audioEl.duration || playerStore.duration);
-  updateMediaPositionState(true);
-});
+function attachAudioElementListeners(el: HTMLAudioElement): void {
+  const isActive = () => el === audioEl;
 
-audioEl.addEventListener('timeupdate', () => {
-  setPlayerStore('currentTime', audioEl.currentTime);
+  el.addEventListener('loadedmetadata', () => {
+    if (!isActive()) return;
+    setPlayerStore('duration', audioEl.duration || playerStore.duration);
+    updateMediaPositionState(true);
+  });
 
-  const duration = audioEl.duration || playerStore.duration;
+  el.addEventListener('timeupdate', () => {
+    if (!isActive()) return;
+    setPlayerStore('currentTime', audioEl.currentTime);
 
-  // Play-count threshold — once per track session, after ≥ 30 s or 25 % of
-  // duration (whichever comes first). Skipping a track before this point
-  // does not register as a play. Short tracks (e.g. 60 s) still pass via
-  // the percentage gate.
-  if (
-    playerStore.currentTrack &&
-    !playerStore.playCounted &&
-    (audioEl.currentTime >= 30 || (duration && audioEl.currentTime / duration >= 0.25))
-  ) {
-    setPlayerStore('playCounted', true);
-    // Mark this queue index as played so the queue panel labels it correctly.
-    const idx = playerStore.queueIndex;
-    if (idx >= 0 && !playerStore.played.includes(idx)) {
-      setPlayerStore('played', (arr) => [...arr, idx]);
+    const duration = audioEl.duration || playerStore.duration;
+
+    // Play-count threshold — once per track session, after ≥ 30 s or 25 % of
+    // duration (whichever comes first). Skipping a track before this point
+    // does not register as a play. Short tracks (e.g. 60 s) still pass via
+    // the percentage gate.
+    if (
+      playerStore.currentTrack &&
+      !playerStore.playCounted &&
+      (audioEl.currentTime >= 30 || (duration && audioEl.currentTime / duration >= 0.25))
+    ) {
+      setPlayerStore('playCounted', true);
+      // Mark this queue index as played so the queue panel labels it correctly.
+      const idx = playerStore.queueIndex;
+      if (idx >= 0 && !playerStore.played.includes(idx)) {
+        setPlayerStore('played', (arr) => [...arr, idx]);
+      }
+      void api.recordPlay(playerStore.currentTrack.id).catch(console.error);
     }
-    void api.recordPlay(playerStore.currentTrack.id).catch(console.error);
-  }
 
-  // 80 %-completion mark — single-shot per track. Doesn't bump play_count
-  // (that already happened at the threshold above); just sets completed=1
-  // on the most recent play_history row.
-  if (
-    playerStore.currentTrack &&
-    !playerStore.completedReported &&
-    duration &&
-    audioEl.currentTime / duration >= 0.8
-  ) {
-    setPlayerStore('completedReported', true);
-    void api.markPlayCompleted(playerStore.currentTrack.id).catch(console.error);
-  }
+    // 80 %-completion mark — single-shot per track. Doesn't bump play_count
+    // (that already happened at the threshold above); just sets completed=1
+    // on the most recent play_history row.
+    if (
+      playerStore.currentTrack &&
+      !playerStore.completedReported &&
+      duration &&
+      audioEl.currentTime / duration >= 0.8
+    ) {
+      setPlayerStore('completedReported', true);
+      void api.markPlayCompleted(playerStore.currentTrack.id).catch(console.error);
+    }
 
-  // Throttled position checkpoint.
-  const now = Date.now();
-  if (now - lastPositionSaveAt >= POSITION_SAVE_INTERVAL_MS) {
-    lastPositionSaveAt = now;
-    savePlaybackSession();
-  }
+    // Throttled position checkpoint.
+    const now = Date.now();
+    if (now - lastPositionSaveAt >= POSITION_SAVE_INTERVAL_MS) {
+      lastPositionSaveAt = now;
+      savePlaybackSession();
+    }
 
-  // Throttled OS position state push (~1 Hz).
-  updateMediaPositionState();
+    // Throttled OS position state push (~1 Hz).
+    updateMediaPositionState();
 
-  // Gapless preload when ≤5 s remain.
-  if (duration && duration - audioEl.currentTime <= 5) {
-    preloadNext();
-  }
-});
+    // Gapless preload when ≤5 s remain.
+    if (duration && duration - audioEl.currentTime <= 5) {
+      preloadNext();
+    }
+  });
 
-audioEl.addEventListener('play', () => {
-  setPlayerStore('isPlaying', true);
-  setMediaPlaybackState('playing');
-  updateMediaPositionState(true);
-});
+  el.addEventListener('play', () => {
+    if (!isActive()) return;
+    setPlayerStore('isPlaying', true);
+    setMediaPlaybackState('playing');
+    updateMediaPositionState(true);
+  });
 
-audioEl.addEventListener('pause', () => {
-  if (!audioEl.ended) {
+  el.addEventListener('pause', () => {
+    if (!isActive() || el.ended) return;
     setPlayerStore('isPlaying', false);
     setMediaPlaybackState('paused');
     updateMediaPositionState(true);
-  }
-});
+  });
 
-audioEl.addEventListener('seeked', () => {
-  updateMediaPositionState(true);
-});
+  el.addEventListener('seeked', () => {
+    if (!isActive()) return;
+    updateMediaPositionState(true);
+  });
 
-audioEl.addEventListener('ratechange', () => {
-  updateMediaPositionState(true);
-});
+  el.addEventListener('ratechange', () => {
+    if (!isActive()) return;
+    updateMediaPositionState(true);
+  });
 
-audioEl.addEventListener('ended', () => {
-  setPlayerStore('isPlaying', false);
-  if (playerStore.repeat === 'one' && playerStore.currentTrack) {
-    audioEl.currentTime = 0;
-    void audioEl.play().catch(console.error);
-    return;
-  }
-  playerStore.next();
-});
-
-audioEl.addEventListener('error', () => {
-  const err = audioEl.error;
-  console.error('[player] audio error', err);
-  let message = 'Playback failed';
-  if (err) {
-    switch (err.code) {
-      case MediaError.MEDIA_ERR_ABORTED: message = 'Playback aborted'; break;
-      case MediaError.MEDIA_ERR_NETWORK: message = 'Network error — could not load track'; break;
-      case MediaError.MEDIA_ERR_DECODE: message = 'Decode error — codec not supported by your browser'; break;
-      case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-        message = 'Source not supported (404, CORS, or unsupported codec)'; break;
+  el.addEventListener('ended', () => {
+    if (!isActive()) return;
+    setPlayerStore('isPlaying', false);
+    if (playerStore.repeat === 'one' && playerStore.currentTrack) {
+      audioEl.currentTime = 0;
+      void audioEl.play().catch(console.error);
+      return;
     }
-    if (err.message) message += `: ${err.message}`;
-  }
-  setPlayerStore({ isPlaying: false, audioError: message });
-});
+    playerStore.next();
+  });
+
+  el.addEventListener('error', () => {
+    if (!isActive()) {
+      // A failed preload must not poison the next advance — clear the marker
+      // so setTrack falls back to a fresh fetch instead of swapping in a
+      // dead element.
+      if (el === nextAudioEl && nextPreloadedFor !== null) {
+        nextPreloadedFor = null;
+        el.removeAttribute('src');
+        el.load();
+      }
+      return;
+    }
+    const err = el.error;
+    console.error('[player] audio error', err);
+    let message = 'Playback failed';
+    if (err) {
+      switch (err.code) {
+        case MediaError.MEDIA_ERR_ABORTED: message = 'Playback aborted'; break;
+        case MediaError.MEDIA_ERR_NETWORK: message = 'Network error — could not load track'; break;
+        case MediaError.MEDIA_ERR_DECODE: message = 'Decode error — codec not supported by your browser'; break;
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          message = 'Source not supported (404, CORS, or unsupported codec)'; break;
+      }
+      if (err.message) message += `: ${err.message}`;
+    }
+    setPlayerStore({ isPlaying: false, audioError: message });
+  });
+}
 
 // ────────────────────────────────────────────────────────────────────────
 // Gapless preload
 // ────────────────────────────────────────────────────────────────────────
 
 function preloadNext(): void {
-  const { queue, queueIndex } = playerStore;
-  if (queueIndex < 0 || queueIndex >= queue.length - 1) return;
-  const next = queue[queueIndex + 1];
+  const { queue, queueIndex, shuffle, repeat } = playerStore;
+  if (queueIndex < 0 || !queue.length) return;
+
+  let nextIndex: number;
+  if (shuffle && queue.length > 1) {
+    // The shuffled successor is random — preloading queueIndex+1 would
+    // download a full wrong track per song. The one predictable case is a
+    // forward stack from prev(): next() will replay its top.
+    if (!shuffleForward.length) return;
+    nextIndex = shuffleForward[shuffleForward.length - 1];
+  } else {
+    nextIndex = queueIndex + 1;
+    if (nextIndex >= queue.length) {
+      if (repeat !== 'all') return;
+      nextIndex = 0;    // wrap-around is the known successor under repeat-all
+    }
+  }
+
+  const next = queue[nextIndex];
   if (!next || nextPreloadedFor === next.id) return;
+  nextAudioEl.preload = 'auto';
   nextAudioEl.src = api.streamUrl(next.id);
   nextPreloadedFor = next.id;
 }
@@ -652,9 +774,18 @@ function compactTrack(track: Track | null): Track | null {
 export function savePlaybackSession(): void {
   if (restoringSession) return;
   try {
-    const blob: PersistedPlaybackSession = {
+    // The queue lives under its own key and is re-serialized only when it
+    // changed — the frequent saves (position checkpoints, volume, play/pause)
+    // then only write the small state blob below.
+    if (queueDirty) {
+      localStorage.setItem(
+        PLAYBACK_QUEUE_KEY,
+        JSON.stringify(playerStore.queue.map((t) => compactTrack(t)))
+      );
+      queueDirty = false;
+    }
+    const blob: Omit<PersistedPlaybackSession, 'queue'> = {
       currentTrack: compactTrack(playerStore.currentTrack),
-      queue: playerStore.queue.map((t) => compactTrack(t) as Track),
       queueIndex: playerStore.queueIndex,
       currentTime: audioEl.currentTime,
       duration: playerStore.duration,
@@ -678,61 +809,102 @@ function readPlaybackSession(): PersistedPlaybackSession | null {
     if (
       typeof parsed !== 'object' ||
       !parsed ||
-      typeof parsed.currentTime !== 'number' ||
-      !Array.isArray(parsed.queue)
+      typeof parsed.currentTime !== 'number'
     ) return null;
+    // Sessions written before the queue was split out carry it inline;
+    // otherwise read the separate queue key.
+    if (!Array.isArray(parsed.queue)) {
+      const rawQueue = localStorage.getItem(PLAYBACK_QUEUE_KEY);
+      parsed.queue = rawQueue ? JSON.parse(rawQueue) : [];
+      if (!Array.isArray(parsed.queue)) parsed.queue = [];
+    }
     return parsed as PersistedPlaybackSession;
   } catch {
     return null;
   }
 }
 
+/**
+ * Cancels the seek a session restore deferred to `loadedmetadata`. setTrack
+ * calls this so a user who picks a new track before the restored one finishes
+ * loading can't have the stale restore clobber the fresh playback.
+ */
+let cancelPendingRestoreSeek: () => void = () => {};
+
 export function restorePlaybackSession(): void {
   const blob = readPlaybackSession();
   if (!blob || !blob.currentTrack) return;
-  restoringSession = true;
   const track = compactTrack(blob.currentTrack)!;
+  const target = Math.max(0, Number.isFinite(blob.currentTime) ? blob.currentTime : 0);
+  const knownDuration = blob.duration || track.duration || 0;
 
-  audioEl.src = api.streamUrl(track.id);
-  audioEl.volume = blob.isMuted ? 0 : blob.volume;
+  // Apply the whole session synchronously — persistence must keep working
+  // even if the saved track never loads (404 after a re-sync, server down).
+  // Only the seek waits for metadata.
+  restoringSession = true;
+  setPlayerStore({
+    currentTrack: track,
+    queue: blob.queue.map((t) => compactTrack(t) as Track),
+    queueIndex: blob.queueIndex,
+    currentTime: target,
+    duration: knownDuration,
+    shuffle: blob.shuffle,
+    repeat: blob.repeat,
+    volume: blob.volume,
+    isMuted: blob.isMuted,
+    isPlaying: false,        // never auto-play after a refresh
+    // Resuming mid-track must not record another play on every refresh —
+    // derive the single-shot flags from the restored position.
+    playCounted: target >= 30 || (knownDuration > 0 && target / knownDuration >= 0.25),
+    completedReported: knownDuration > 0 && target / knownDuration >= 0.8
+  });
+  restoringSession = false;
+  updateMediaSession(track);
+
+  // Metadata-only until the user presses play — a page load shouldn't
+  // download whole tracks (startPlayback flips preload back to 'auto').
+  const el = audioEl;
+  el.preload = 'metadata';
 
   const onLoaded = () => {
-    audioEl.removeEventListener('loadedmetadata', onLoaded);
-    const target = Math.max(0, Math.min(blob.currentTime, audioEl.duration || blob.duration || 0));
-    if (Number.isFinite(target)) {
-      try { audioEl.currentTime = target; } catch {}
+    cleanup();
+    const clamped = Math.min(target, el.duration || target);
+    if (Number.isFinite(clamped)) {
+      try { el.currentTime = clamped; } catch {}
     }
-    setPlayerStore({
-      currentTrack: track,
-      queue: blob.queue.map((t) => compactTrack(t) as Track),
-      queueIndex: blob.queueIndex,
-      currentTime: target,
-      duration: audioEl.duration || blob.duration || 0,
-      shuffle: blob.shuffle,
-      repeat: blob.repeat,
-      volume: blob.volume,
-      isMuted: blob.isMuted,
-      isPlaying: false,        // never auto-play after a refresh
-      completedReported: false,
-      playCounted: false
-    });
-    updateMediaSession(track);
-    preloadNext();
-    restoringSession = false;
-    refreshCurrentTrackMetadata(track.id);
+    setPlayerStore({ currentTime: clamped, duration: el.duration || knownDuration });
+    updateMediaPositionState(true);
   };
+  const onError = () => cleanup();
+  const cleanup = () => {
+    el.removeEventListener('loadedmetadata', onLoaded);
+    el.removeEventListener('error', onError);
+    cancelPendingRestoreSeek = () => {};
+  };
+  cancelPendingRestoreSeek = cleanup;
+  el.addEventListener('loadedmetadata', onLoaded);
+  el.addEventListener('error', onError);
 
-  if (audioEl.readyState >= 1 && audioEl.duration) {
-    onLoaded();
-  } else {
-    audioEl.addEventListener('loadedmetadata', onLoaded);
-  }
+  el.src = api.streamUrl(track.id);
+  el.volume = blob.isMuted ? 0 : blob.volume;
+
+  refreshCurrentTrackMetadata(track.id);
+}
+
+/** Apply a patch to the queue's copy of a track (it's separate from currentTrack). */
+function patchQueueTrack(id: number, patch: Partial<Track>): void {
+  const qi = playerStore.queue.findIndex((t) => t.id === id);
+  if (qi < 0) return;
+  setPlayerStore('queue', qi, (t) => ({ ...t, ...patch }));
+  queueDirty = true;
 }
 
 function refreshCurrentTrackMetadata(trackId: number): void {
   api.getTrack(trackId).then((fresh) => {
     if (playerStore.currentTrack?.id !== fresh.id) return;
-    setPlayerStore('currentTrack', compactTrack(fresh)!);
+    const compact = compactTrack(fresh)!;
+    setPlayerStore('currentTrack', compact);
+    patchQueueTrack(trackId, compact);
   }).catch(() => {});
 }
 

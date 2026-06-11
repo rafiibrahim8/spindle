@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import { getDb } from '../db/init.js';
+import { getDb, prepared } from '../db/init.js';
 import type { SyncEvent, SyncResult, TrackMeta } from '../types.js';
 import { extractMetadata, partialHash } from './metadata.js';
 import { upsertLyrics } from './lyrics.js';
@@ -18,6 +18,15 @@ interface JobRecord {
 
 const jobs = new Map<string, JobRecord>();
 let latestRunningJobId: string | null = null;
+
+/**
+ * Yield to the event loop between batches of synchronous work. Everything in
+ * this process — including in-flight audio streams — shares one event loop,
+ * and better-sqlite3 is synchronous; a single monolithic persist over a large
+ * library used to block stream delivery long enough to stutter playback.
+ */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+const PERSIST_CHUNK_SIZE = 200;
 
 export function createSyncJob(rootDir: string): string {
   const id = randomUUID();
@@ -37,6 +46,12 @@ export function createSyncJob(rootDir: string): string {
     })
     .finally(() => {
       if (latestRunningJobId === id) latestRunningJobId = null;
+      // Bound memory: keep only this (most recent) finished job; older
+      // finished jobs and their event buffers are no longer reachable by
+      // any client that matters.
+      for (const [jobId, job] of jobs) {
+        if (jobId !== id && job.status !== 'running') jobs.delete(jobId);
+      }
     });
 
   return id;
@@ -58,18 +73,28 @@ export function getActiveJobId(): string | null {
 
 async function runSync(rootDir: string, record: JobRecord): Promise<void> {
   const db = getDb();
+  resetUpsertCaches();
   const emit = (event: SyncEvent) => {
-    record.events.push(event);
+    // Coalesce stored progress events per phase: a late-connecting SSE client
+    // only needs the latest position, not thousands of intermediate ticks.
+    // Live listeners still receive every event via the emitter.
+    const last = record.events[record.events.length - 1];
+    if (event.type === 'progress' && last?.type === 'progress' && last.phase === event.phase) {
+      record.events[record.events.length - 1] = event;
+    } else {
+      record.events.push(event);
+    }
     record.emitter.emit('event', event);
   };
-
-  // Persist music root immediately.
-  upsertSetting('music_root', rootDir);
 
   emit({ type: 'progress', phase: 'scanning', current: 0, total: 0 });
 
   const files = await scanDirectory(rootDir);
   emit({ type: 'progress', phase: 'scanning', current: files.length, total: files.length });
+
+  // Persist music root only once the scan succeeded, so a bad path can't
+  // clobber a previously saved good setting.
+  upsertSetting('music_root', rootDir);
 
   // Build the existing index ahead of time. Includes size so we can decide
   // rclone-style: identical-by-stat → cheap hash verify; differing stat → still
@@ -156,10 +181,12 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
 
   // Files that exist in DB but no longer on disk → delete.
   const toDeleteSet = new Set<number>();
+  let existenceChecks = 0;
   for (const [filePath, info] of existing) {
     if (!onDisk.has(filePath) && !fs.existsSync(filePath)) {
       toDeleteSet.add(info.id);
     }
+    if (++existenceChecks % 500 === 0) await yieldToEventLoop();
   }
 
   // Detect moves: a "new" file whose hash AND size match a "deleted" row is
@@ -191,40 +218,67 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
   toAdd = remainingAdds;
   const toDelete = [...toDeleteSet];
 
-  // Persist all changes in a single synchronous transaction.
-  emit({
-    type: 'progress',
-    phase: 'persisting',
-    current: 0,
-    total: toAdd.length + toUpdate.length + toTouch.length
-  });
+  // Persist in chunked transactions with event-loop yields between them, so
+  // a large sync never starves concurrent requests (especially audio
+  // streams). Trade-off vs. one big transaction: a crash mid-persist leaves a
+  // partially synced library, which the next sync repairs.
+  const touchStmt = db.prepare(
+    'UPDATE tracks SET file_mtime = ?, file_size = ?, last_scanned = ? WHERE id = ?'
+  );
+  const deleteStmt = db.prepare('DELETE FROM tracks WHERE id = ?');
+  const touchedAt = Date.now();
 
-  const persist = db.transaction(() => {
-    for (const meta of toAdd) {
+  const persistOps: Array<() => void> = [
+    ...toAdd.map((meta) => () => {
       const trackId = insertTrack(meta);
       writeLyrics(trackId, meta);
-    }
-    for (const { id, meta } of toUpdate) {
+    }),
+    ...toUpdate.map(({ id, meta }) => () => {
       updateTrack(id, meta);
       writeLyrics(id, meta);
-    }
-    const touchStmt = db.prepare(
-      'UPDATE tracks SET file_mtime = ?, file_size = ?, last_scanned = ? WHERE id = ?'
-    );
-    const now = Date.now();
-    for (const { id, mtime: m, size: s } of toTouch) {
-      touchStmt.run(m, s, now, id);
-    }
-    for (const id of toDelete) {
-      db.prepare('DELETE FROM tracks WHERE id = ?').run(id);
-    }
+    }),
+    ...toTouch.map(({ id, mtime: m, size: s }) => () => {
+      touchStmt.run(m, s, touchedAt, id);
+    }),
+    ...toDelete.map((id) => () => {
+      deleteStmt.run(id);
+    })
+  ];
+
+  emit({ type: 'progress', phase: 'persisting', current: 0, total: persistOps.length });
+
+  const runChunk = db.transaction((ops: Array<() => void>) => {
+    for (const op of ops) op();
   });
-  persist();
+  for (let i = 0; i < persistOps.length; i += PERSIST_CHUNK_SIZE) {
+    runChunk(persistOps.slice(i, i + PERSIST_CHUNK_SIZE));
+    emit({
+      type: 'progress',
+      phase: 'persisting',
+      current: Math.min(i + PERSIST_CHUNK_SIZE, persistOps.length),
+      total: persistOps.length
+    });
+    await yieldToEventLoop();
+  }
+
+  // Garbage-collect rows orphaned by deletes/moves: albums with no remaining
+  // tracks, then artists referenced by neither a track nor a surviving album
+  // (albums first, so an empty album doesn't keep its artist alive).
+  db.exec(`
+    DELETE FROM albums WHERE id NOT IN (
+      SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL
+    );
+    DELETE FROM artists WHERE id NOT IN (
+      SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL
+      UNION
+      SELECT DISTINCT artist_id FROM albums WHERE artist_id IS NOT NULL
+    );
+  `);
 
   upsertSetting('last_sync_at', String(Date.now()));
 
   // Refresh smart-playlist contents (Top 25 / Recently Added / Never Played + per-genre).
-  refreshSmartPlaylists();
+  await refreshSmartPlaylists();
 
   const result: SyncResult = {
     added: toAdd.length,
@@ -238,13 +292,24 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
   emit({ type: 'done', ...result });
 }
 
+// Per-sync-run lookup caches so repeated tracks of the same artist/album skip
+// the SELECT entirely. Reset at the start of each run; safe because only one
+// sync job runs at a time and nothing else writes these tables mid-sync.
+const artistIdByName = new Map<string, number>();
+const albumCacheByKey = new Map<string, { id: number; hasArt: boolean }>();
+
+function resetUpsertCaches(): void {
+  artistIdByName.clear();
+  albumCacheByKey.clear();
+}
+
 function insertTrack(meta: TrackMeta): number {
   const db = getDb();
   const artistId = upsertArtist(meta.artist);
   const albumArtistId = upsertArtist(meta.albumArtist);
   const albumId = upsertAlbum(meta.album, albumArtistId, meta.year, meta.genre, meta.artPath);
 
-  const stmt = db.prepare(`
+  const stmt = prepared(db, `
     INSERT INTO tracks (
       file_path, file_hash, file_size, file_mtime,
       title, artist, album_artist, album, year,
@@ -293,7 +358,7 @@ function updateTrack(id: number, meta: TrackMeta): void {
   const albumArtistId = upsertArtist(meta.albumArtist);
   const albumId = upsertAlbum(meta.album, albumArtistId, meta.year, meta.genre, meta.artPath);
 
-  db.prepare(`
+  prepared(db, `
     UPDATE tracks SET
       file_path = @filePath,
       file_hash = @fileHash,
@@ -344,11 +409,16 @@ function updateTrack(id: number, meta: TrackMeta): void {
 }
 
 function upsertArtist(name: string): number {
+  const cached = artistIdByName.get(name);
+  if (cached !== undefined) return cached;
+
   const db = getDb();
-  const existing = db.prepare<[string]>('SELECT id FROM artists WHERE name = ?').get(name) as { id: number } | undefined;
-  if (existing) return existing.id;
-  const result = db.prepare('INSERT INTO artists(name) VALUES(?)').run(name);
-  return Number(result.lastInsertRowid);
+  const existing = prepared(db, 'SELECT id FROM artists WHERE name = ?').get(name) as { id: number } | undefined;
+  const id = existing
+    ? existing.id
+    : Number(prepared(db, 'INSERT INTO artists(name) VALUES(?)').run(name).lastInsertRowid);
+  artistIdByName.set(name, id);
+  return id;
 }
 
 function upsertAlbum(
@@ -359,26 +429,42 @@ function upsertAlbum(
   artPath: string | null
 ): number {
   const db = getDb();
-  const existing = db
-    .prepare<[string, number | null, number | null]>(
-      'SELECT id, art_path FROM albums WHERE title = ? AND (artist_id IS ? OR artist_id = ?)'
-    )
-    .get(title, artistId, artistId) as { id: number; art_path: string | null } | undefined;
-  if (existing) {
-    if (artPath && !existing.art_path) {
-      db.prepare('UPDATE albums SET art_path = ? WHERE id = ?').run(artPath, existing.id);
+  const key = `${artistId ?? ''} ${title}`;
+  const cached = albumCacheByKey.get(key);
+  if (cached) {
+    // First track of the album may lack embedded art; later ones can fill it.
+    if (artPath && !cached.hasArt) {
+      prepared(db, 'UPDATE albums SET art_path = ? WHERE id = ?').run(artPath, cached.id);
+      cached.hasArt = true;
     }
+    return cached.id;
+  }
+
+  const existing = prepared(
+    db,
+    'SELECT id, art_path FROM albums WHERE title = ? AND (artist_id IS ? OR artist_id = ?)'
+  ).get(title, artistId, artistId) as { id: number; art_path: string | null } | undefined;
+  if (existing) {
+    let hasArt = Boolean(existing.art_path);
+    if (artPath && !hasArt) {
+      prepared(db, 'UPDATE albums SET art_path = ? WHERE id = ?').run(artPath, existing.id);
+      hasArt = true;
+    }
+    albumCacheByKey.set(key, { id: existing.id, hasArt });
     return existing.id;
   }
-  const result = db
-    .prepare('INSERT INTO albums(title, artist_id, year, genre, art_path) VALUES(?, ?, ?, ?, ?)')
-    .run(title, artistId, year, genre, artPath);
-  return Number(result.lastInsertRowid);
+  const result = prepared(
+    db,
+    'INSERT INTO albums(title, artist_id, year, genre, art_path) VALUES(?, ?, ?, ?, ?)'
+  ).run(title, artistId, year, genre, artPath);
+  const id = Number(result.lastInsertRowid);
+  albumCacheByKey.set(key, { id, hasArt: Boolean(artPath) });
+  return id;
 }
 
 function writeLyrics(trackId: number, meta: TrackMeta): void {
   if (!meta.syncedLrc && !meta.unsyncedText) {
-    getDb().prepare('DELETE FROM lyrics WHERE track_id = ?').run(trackId);
+    prepared(getDb(), 'DELETE FROM lyrics WHERE track_id = ?').run(trackId);
     return;
   }
   upsertLyrics(getDb(), {
@@ -394,63 +480,83 @@ function upsertSetting(key: string, value: string): void {
     .run(key, value);
 }
 
-function refreshSmartPlaylists(): void {
+async function refreshSmartPlaylists(): Promise<void> {
   const db = getDb();
 
   const ensure = (smartKey: string, name: string): number => {
-    const row = db.prepare<[string]>('SELECT id FROM playlists WHERE smart_key = ?').get(smartKey) as { id: number } | undefined;
+    const bySmartKey = db.prepare<[string]>('SELECT id FROM playlists WHERE smart_key = ?');
+    // ON CONFLICT(name) DO NOTHING: a user-created playlist may already own
+    // this name (playlists.name is UNIQUE) — don't let that abort the sync.
+    const insert = db.prepare(
+      'INSERT INTO playlists(name, read_only, smart_key) VALUES(?, 1, ?) ON CONFLICT(name) DO NOTHING'
+    );
+    let row = bySmartKey.get(smartKey) as { id: number } | undefined;
     if (row) return row.id;
-    const result = db
-      .prepare('INSERT INTO playlists(name, read_only, smart_key) VALUES(?, 1, ?)')
-      .run(name, smartKey);
-    return Number(result.lastInsertRowid);
+    insert.run(name, smartKey);
+    row = bySmartKey.get(smartKey) as { id: number } | undefined;
+    if (row) return row.id;
+    // Name taken by a non-smart playlist — retry with a disambiguating suffix.
+    insert.run(`${name} (Smart)`, smartKey);
+    row = bySmartKey.get(smartKey) as { id: number } | undefined;
+    if (!row) throw new Error(`Could not create smart playlist "${name}" (name conflict)`);
+    return row.id;
   };
 
-  const populate = (playlistId: number, trackIds: number[]): void => {
+  // One transaction per playlist (delete + reinsert stays atomic per list),
+  // with an event-loop yield between playlists so a rebuild across many
+  // genres doesn't block concurrent requests.
+  const populate = db.transaction((playlistId: number, trackIds: number[]): void => {
     db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistId);
     const insert = db.prepare('INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES(?, ?, ?)');
     trackIds.forEach((trackId, index) => insert.run(playlistId, trackId, index));
-  };
-
-  const seed = db.transaction(() => {
-    const mostPlayedId = ensure('most-played', 'Top 25 Most Played');
-    const recentAddedId = ensure('recently-added', 'Recently Added');
-    const neverPlayedId = ensure('never-played', 'Never Played');
-
-    const top25 = db.prepare(`
-      SELECT t.id FROM tracks t
-      JOIN play_stats s ON s.track_id = t.id
-      ORDER BY s.play_count DESC, s.last_played DESC
-      LIMIT 25
-    `).all() as Array<{ id: number }>;
-    populate(mostPlayedId, top25.map((r) => r.id));
-
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const recent = db.prepare<[number]>(`
-      SELECT id FROM tracks WHERE date_added >= ? ORDER BY date_added DESC
-    `).all(thirtyDaysAgo) as Array<{ id: number }>;
-    populate(recentAddedId, recent.map((r) => r.id));
-
-    const never = db.prepare(`
-      SELECT t.id FROM tracks t
-      LEFT JOIN play_stats s ON s.track_id = t.id
-      WHERE COALESCE(s.play_count, 0) = 0
-      ORDER BY t.title
-    `).all() as Array<{ id: number }>;
-    populate(neverPlayedId, never.map((r) => r.id));
-
-    // Per-genre smart playlists.
-    const genres = db
-      .prepare(`SELECT DISTINCT genre FROM tracks WHERE genre IS NOT NULL AND genre <> ''`)
-      .all() as Array<{ genre: string }>;
-    for (const { genre } of genres) {
-      const smartKey = `genre:${genre.toLowerCase()}`;
-      const playlistId = ensure(smartKey, `All ${genre}`);
-      const tracks = db
-        .prepare<[string]>('SELECT id FROM tracks WHERE genre = ? ORDER BY title')
-        .all(genre) as Array<{ id: number }>;
-      populate(playlistId, tracks.map((r) => r.id));
-    }
   });
-  seed();
+
+  const mostPlayedId = ensure('most-played', 'Top 25 Most Played');
+  const recentAddedId = ensure('recently-added', 'Recently Added');
+  const neverPlayedId = ensure('never-played', 'Never Played');
+
+  const top25 = db.prepare(`
+    SELECT t.id FROM tracks t
+    JOIN play_stats s ON s.track_id = t.id
+    ORDER BY s.play_count DESC, s.last_played DESC
+    LIMIT 25
+  `).all() as Array<{ id: number }>;
+  populate(mostPlayedId, top25.map((r) => r.id));
+  await yieldToEventLoop();
+
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recent = db.prepare<[number]>(`
+    SELECT id FROM tracks WHERE date_added >= ? ORDER BY date_added DESC
+  `).all(thirtyDaysAgo) as Array<{ id: number }>;
+  populate(recentAddedId, recent.map((r) => r.id));
+  await yieldToEventLoop();
+
+  const never = db.prepare(`
+    SELECT t.id FROM tracks t
+    LEFT JOIN play_stats s ON s.track_id = t.id
+    WHERE COALESCE(s.play_count, 0) = 0
+    ORDER BY t.title
+  `).all() as Array<{ id: number }>;
+  populate(neverPlayedId, never.map((r) => r.id));
+  await yieldToEventLoop();
+
+  // Per-genre smart playlists. Genres are grouped case-insensitively so
+  // "Rock" and "rock" share one playlist; MIN(genre) picks a stable display
+  // spelling.
+  const genres = db
+    .prepare(`
+      SELECT MIN(genre) AS genre FROM tracks
+      WHERE genre IS NOT NULL AND genre <> ''
+      GROUP BY genre COLLATE NOCASE
+    `)
+    .all() as Array<{ genre: string }>;
+  for (const { genre } of genres) {
+    const smartKey = `genre:${genre.toLowerCase()}`;
+    const playlistId = ensure(smartKey, `All ${genre}`);
+    const tracks = db
+      .prepare<[string]>('SELECT id FROM tracks WHERE genre = ? COLLATE NOCASE ORDER BY title')
+      .all(genre) as Array<{ id: number }>;
+    populate(playlistId, tracks.map((r) => r.id));
+    await yieldToEventLoop();
+  }
 }

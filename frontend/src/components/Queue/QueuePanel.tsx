@@ -68,9 +68,12 @@ export function QueueView() {
             style={{ height: `${virtualizer.getTotalSize()}px` }}
           >
             <For each={virtualizer.getVirtualItems()}>{(item) => {
-              const track = queue()[item.index];
-              if (!track) return null;
+              // Reactively track queue()[item.index] so drag-reorders flow into
+              // the rendered rows. A captured const would be set once and never
+              // update.
+              const trackAt = createMemo(() => queue()[item.index]);
               return (
+                <Show when={trackAt()}>{(track) => (
                 <div
                   class={`queue-row ${item.index === player.queueIndex ? 'is-current' : ''}`}
                   style={{
@@ -85,32 +88,33 @@ export function QueueView() {
                   onDragStart={() => setDragging(item.index)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => onDrop(e, item.index)}
-                  onDblClick={() => player.setTrack(track, queue(), item.index)}
-                  title={`${track.title || ''} — ${track.artist || ''}`}
+                  onDblClick={() => player.setTrack(track(), queue(), item.index)}
+                  title={`${track().title || ''} — ${track().artist || ''}`}
                 >
-                  <AlbumArt artPath={track.artPath} title={track.album} size="sm" />
+                  <AlbumArt artPath={track().artPath} title={track().album} size="sm" />
                   <div class="queue-meta">
-                    <strong class="truncate">{track.title}</strong>
+                    <strong class="truncate">{track().title}</strong>
                     <button
                       type="button"
                       class="truncate muted link-text"
                       onClick={(e) => {
                         e.stopPropagation();
-                        openArtist(track.artistId, navigate);
+                        openArtist(track().artistId, navigate);
                         player.setShowNowPlaying(false);
                       }}
-                      disabled={!track.artistId}
+                      disabled={!track().artistId}
                     >
-                      {track.artist}
+                      {track().artist}
                     </button>
                   </div>
                   <span class="queue-status">
-                    <Show when={track.id === player.currentTrack?.id}>
+                    <Show when={track().id === player.currentTrack?.id}>
                       <PlayingIndicator active={player.isPlaying} />
                     </Show>
                     {labelFor(item.index)}
                   </span>
                 </div>
+                )}</Show>
               );
             }}</For>
           </div>

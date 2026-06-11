@@ -50,7 +50,7 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const codec = (fmt.codec || fmt.container || null)?.toString().toLowerCase() || null;
 
   const picture = pickFrontCover(tags.picture);
-  const artPath = picture ? await cacheAlbumArt(picture, fileHash) : null;
+  const artPath = picture ? await cacheAlbumArt(picture) : null;
 
   const syncedLrc = extractSyncedLyricsFromTags(meta);
   const unsyncedText = extractUnsyncedFromTags(meta);
@@ -94,7 +94,11 @@ function pickFrontCover(pics: IPicture[] | undefined): IPicture | null {
   return front || pics[0];
 }
 
-async function cacheAlbumArt(picture: IPicture, hash: string): Promise<string> {
+async function cacheAlbumArt(picture: IPicture): Promise<string> {
+  // Key the cache on the picture bytes themselves (not the track hash), so
+  // identical embedded art across an album is encoded by sharp exactly once
+  // and every track shares the same cached file.
+  const hash = crypto.createHash('sha256').update(picture.data).digest('hex');
   const filename = `${hash}.webp`;
   const target = path.join(ART_CACHE_DIR, filename);
   if (fs.existsSync(target)) return `/art/${filename}`;

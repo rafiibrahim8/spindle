@@ -11,6 +11,22 @@ router.post('/start', (req, res) => {
     res.status(400).json({ error: 'musicRoot is required' });
     return;
   }
+  // Reject bad paths up front, before a job is created — a typo'd root
+  // shouldn't spin up a sync that immediately errors (or worse, clobber the
+  // saved music_root setting).
+  let isDir = false;
+  try { isDir = fs.statSync(musicRoot).isDirectory(); } catch { /* missing */ }
+  if (!isDir) {
+    res.status(400).json({ error: `musicRoot is not a directory: ${musicRoot}` });
+    return;
+  }
+  // Only one sync at a time: concurrent jobs interleave via the event-loop
+  // yields and collide on the tracks.file_path UNIQUE constraint.
+  const activeJobId = getActiveJobId();
+  if (activeJobId) {
+    res.status(409).json({ error: 'Sync already running', jobId: activeJobId });
+    return;
+  }
   const jobId = createSyncJob(musicRoot);
   res.json({ jobId });
 });

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/solid-query';
 import { ListMusic, Plus, Search } from 'lucide-solid';
-import { Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { api } from '../api/client';
 import { TrackList } from '../components/Library/TrackList';
 import { EmptyState } from '../components/common/EmptyState';
@@ -150,7 +150,7 @@ export function Playlists() {
 function PlaylistGrid(props: { playlists: Playlist[]; onSelect: (p: Playlist) => void }) {
   return (
     <div class="playlist-grid">
-      {props.playlists.map((p) => (
+      <For each={props.playlists}>{(p) => (
         <button class="playlist-card" onClick={() => props.onSelect(p)}>
           <div class="playlist-card-icon">
             <ListMusic size={28} />
@@ -163,7 +163,7 @@ function PlaylistGrid(props: { playlists: Playlist[]; onSelect: (p: Playlist) =>
             </span>
           </div>
         </button>
-      ))}
+      )}</For>
     </div>
   );
 }

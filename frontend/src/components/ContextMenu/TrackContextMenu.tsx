@@ -21,6 +21,8 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
   const queryClient = useQueryClient();
   const toggleLike = useLikeToggle();
   const [showPlaylists, setShowPlaylists] = createSignal(false);
+  const [menuSize, setMenuSize] = createSignal({ width: 220, height: 260 });
+  let menuEl: HTMLDivElement | undefined;
 
   const playlists = useQuery(() => ({
     queryKey: ['playlists'],
@@ -29,9 +31,38 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
   }));
 
   onMount(() => {
-    const onDocClick = () => props.onClose();
-    document.addEventListener('click', onDocClick, { once: true });
-    onCleanup(() => document.removeEventListener('click', onDocClick));
+    if (menuEl) {
+      const rect = menuEl.getBoundingClientRect();
+      setMenuSize({ width: rect.width, height: rect.height });
+    }
+    // Solid delegates the menu's own onClick through a document-level
+    // listener, so stopPropagation inside the menu can't beat these native
+    // document listeners — ignore events originating inside the menu instead.
+    const isInsideMenu = (e: Event) =>
+      menuEl != null && e.target instanceof Node && menuEl.contains(e.target);
+    const onDocClick = (e: MouseEvent) => {
+      if (!isInsideMenu(e)) props.onClose();
+    };
+    const onDocContextMenu = (e: MouseEvent) => {
+      if (!isInsideMenu(e)) props.onClose();
+    };
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onClose();
+    };
+    document.addEventListener('click', onDocClick);
+    document.addEventListener('contextmenu', onDocContextMenu);
+    document.addEventListener('keydown', onDocKeyDown);
+    onCleanup(() => {
+      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('contextmenu', onDocContextMenu);
+      document.removeEventListener('keydown', onDocKeyDown);
+    });
+  });
+
+  // Clamp the menu so it never renders past the viewport edges.
+  const pos = () => ({
+    x: Math.max(8, Math.min(props.x, window.innerWidth - menuSize().width - 8)),
+    y: Math.max(8, Math.min(props.y, window.innerHeight - menuSize().height - 8))
   });
 
   const userPlaylists = () => playlists.data?.playlists.filter((p) => !p.readOnly) ?? [];
@@ -53,17 +84,22 @@ export function TrackContextMenu(props: TrackContextMenuProps) {
     props.onClose();
   };
   const addToPlaylist = async (playlistId: number) => {
-    await api.addTrackToPlaylist(playlistId, props.track.id).catch(() => {});
-    void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
+    try {
+      await api.addTrackToPlaylist(playlistId, props.track.id);
+      void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
+      void queryClient.invalidateQueries({ queryKey: ['playlists'] });
+    } catch {
+      // Ignore — the menu closes either way.
+    }
     props.onClose();
   };
 
   return (
     <Portal>
     <div
+      ref={menuEl}
       class="context-menu"
-      style={{ top: `${props.y}px`, left: `${props.x}px` }}
-      onClick={(e) => e.stopPropagation()}
+      style={{ top: `${pos().y}px`, left: `${pos().x}px` }}
     >
       <button onClick={playNow}>Play Now</button>
       <button onClick={addToQueue}>Add to Queue</button>

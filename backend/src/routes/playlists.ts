@@ -75,6 +75,13 @@ router.post('/:id/tracks', (req, res) => {
     res.status(403).json({ error: 'Cannot modify read-only playlist' });
     return;
   }
+  const trackExists = db
+    .prepare<[number]>('SELECT 1 FROM tracks WHERE id = ?')
+    .get(trackId);
+  if (!trackExists) {
+    res.status(404).json({ error: 'Track not found' });
+    return;
+  }
 
   const lastPos = db
     .prepare<[number]>('SELECT MAX(position) AS p FROM playlist_tracks WHERE playlist_id = ?')

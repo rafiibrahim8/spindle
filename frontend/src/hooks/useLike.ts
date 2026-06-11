@@ -50,22 +50,41 @@ export function useLikeToggle() {
   };
 }
 
+/** Query-key heads whose cached data can contain track objects. */
+const TRACK_QUERY_HEADS = new Set([
+  'tracks', 'liked-tracks', 'album-tracks', 'artist-tracks', 'playlist',
+  'recently-played', 'most-played', 'recently-added'
+]);
+
+function isTrackShape(value: unknown, id: number): value is Track {
+  // Tracks and albums share `id`/`title`; `duration` + `albumId` only exist
+  // on tracks, so an album whose id collides can't be patched by accident.
+  return (
+    typeof value === 'object' && value !== null &&
+    (value as Track).id === id &&
+    'duration' in value && 'albumId' in value
+  );
+}
+
 function patchTrackInCache(
   qc: ReturnType<typeof useQueryClient>,
   id: number,
   patch: Partial<Track>
 ): void {
-  qc.setQueriesData<any>({ predicate: () => true }, (old: any) => {
-    if (!old) return old;
-    if (Array.isArray(old.tracks)) {
-      return {
-        ...old,
-        tracks: old.tracks.map((t: Track) => (t.id === id ? { ...t, ...patch } : t))
-      };
+  qc.setQueriesData<any>(
+    { predicate: (q) => TRACK_QUERY_HEADS.has(String(q.queryKey[0])) },
+    (old: any) => {
+      if (!old) return old;
+      if (Array.isArray(old.tracks)) {
+        return {
+          ...old,
+          tracks: old.tracks.map((t: Track) => (t.id === id ? { ...t, ...patch } : t))
+        };
+      }
+      if (isTrackShape(old, id)) {
+        return { ...old, ...patch };
+      }
+      return old;
     }
-    if (typeof old === 'object' && 'id' in old && old.id === id && 'title' in old) {
-      return { ...old, ...patch };
-    }
-    return old;
-  });
+  );
 }

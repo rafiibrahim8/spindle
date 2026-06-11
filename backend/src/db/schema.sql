@@ -127,3 +127,6 @@ CREATE INDEX IF NOT EXISTS idx_tracks_title     ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_play_history_track ON play_history(track_id);
 CREATE INDEX IF NOT EXISTS idx_play_stats_count   ON play_stats(play_count DESC);
 CREATE INDEX IF NOT EXISTS idx_tracks_liked       ON tracks(liked) WHERE liked = 1;
+CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_date_added  ON tracks(date_added);
+CREATE INDEX IF NOT EXISTS idx_tracks_genre       ON tracks(genre);
