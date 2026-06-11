@@ -1,7 +1,7 @@
 import { useNavigate } from '@solidjs/router';
 import { useQuery } from '@tanstack/solid-query';
 import { Music2, Play } from 'lucide-solid';
-import { For, Show, createMemo } from 'solid-js';
+import { Index, Show, createMemo } from 'solid-js';
 import { api } from '../api/client';
 import { AlbumGrid } from '../components/Library/AlbumGrid';
 import { AlbumArt } from '../components/NowPlaying/AlbumArt';
@@ -104,8 +104,11 @@ function Section(props: {
       <Show when={!props.loading} fallback={<Spinner />}>
         <Show when={props.tracks.length} fallback={<p class="muted">Nothing here yet.</p>}>
           <div class="rail-track-grid">
-            <For each={props.tracks}>{(track, index) => {
-              const playRail = () => props.onPlay(props.tracks, index());
+            {/* <Index>, not <For>: the like patch swaps a track for a fresh
+                object, and reference-keyed <For> would tear down and rebuild
+                the card (visible flicker). Position-keyed rows just update. */}
+            <Index each={props.tracks}>{(track, index) => {
+              const playRail = () => props.onPlay(props.tracks, index);
               return (
                 <div
                   class="track-card"
@@ -120,22 +123,22 @@ function Section(props: {
                   }}
                 >
                   <div class="track-card-art">
-                    <AlbumArt artPath={track.artPath} title={track.album} size="lg" />
+                    <AlbumArt artPath={track().artPath} title={track().album} size="lg" />
                     <Show
-                      when={player.currentTrack?.id === track.id}
+                      when={player.currentTrack?.id === track().id}
                       fallback={<span class="track-card-overlay"><Play size={20} /></span>}
                     >
                       <span class="track-card-playing">
                         <PlayingIndicator active={player.isPlaying} />
                       </span>
                     </Show>
-                    <HeartButton track={track} class="track-card-like" />
+                    <HeartButton track={track()} class="track-card-like" />
                   </div>
-                  <strong class="truncate">{track.title}</strong>
-                  <span class="truncate muted">{track.artist}</span>
+                  <strong class="truncate">{track().title}</strong>
+                  <span class="truncate muted">{track().artist}</span>
                 </div>
               );
-            }}</For>
+            }}</Index>
           </div>
         </Show>
       </Show>
