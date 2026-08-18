@@ -8,6 +8,7 @@ import { initDb } from './db/init.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
 import albumsRouter from './routes/albums.js';
+import { createArtRouter } from './routes/art.js';
 import artistsRouter from './routes/artists.js';
 import playlistsRouter from './routes/playlists.js';
 import settingsRouter from './routes/settings.js';
@@ -30,7 +31,10 @@ app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5174' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(logger);
 
-app.use('/art', express.static(ART_CACHE_DIR));
+// Downscaled `?w=` renditions first; everything else falls through to the
+// full-size original. Art filenames are content hashes, so both are immutable.
+app.use('/art', createArtRouter(ART_CACHE_DIR));
+app.use('/art', express.static(ART_CACHE_DIR, { maxAge: '30d', immutable: true }));
 
 app.use('/api/tracks', tracksRouter);
 app.use('/api/albums', albumsRouter);
