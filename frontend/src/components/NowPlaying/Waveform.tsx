@@ -1,12 +1,19 @@
-import { onCleanup, onMount } from 'solid-js';
+import { createEffect, onCleanup, onMount } from 'solid-js';
 import { releaseVisualizer, retainVisualizer, usePlayerStore } from '../../store/playerStore';
 
 const BAR_COUNT = 64;
+/**
+ * Phones report a devicePixelRatio of 3 or more. On a chart of flat bars the
+ * extra density past 2x is invisible, while the fill cost is real — and this
+ * canvas competes with audio for the main thread.
+ */
+const MAX_DPR = 2;
 
 export function Waveform() {
   const player = usePlayerStore();
   let canvas: HTMLCanvasElement | undefined;
   let raf = 0;
+  let start = () => {};
 
   // Playback only runs through the Web Audio graph when something needs it,
   // and the analyser this canvas reads is that something. Retaining builds the
@@ -47,6 +54,7 @@ export function Waveform() {
     };
 
     const draw = (now: number) => {
+      raf = 0;
       // Bail when the tab is hidden — the rAF gets throttled to ~1 Hz anyway,
       // but explicitly returning avoids any canvas / read work on the audio
       // thread's slot.
@@ -56,9 +64,10 @@ export function Waveform() {
       }
 
       const analyser = player.getAnalyser();
+      const dpr = Math.min(devicePixelRatio || 1, MAX_DPR);
       const c = canvas!;
-      const w = c.clientWidth * devicePixelRatio;
-      const h = c.clientHeight * devicePixelRatio;
+      const w = c.clientWidth * dpr;
+      const h = c.clientHeight * dpr;
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
@@ -89,18 +98,35 @@ export function Waveform() {
       const gap = (w / BAR_COUNT) * 0.2;
       const barW = w / BAR_COUNT - gap;
 
+      let peak = 0;
       for (let i = 0; i < BAR_COUNT; i++) {
         const v = data[i] / 255;
-        const barH = Math.max(2 * devicePixelRatio, v * h);
+        if (v > peak) peak = v;
+        const barH = Math.max(2 * dpr, v * h);
         const x = i * (barW + gap);
         ctx.fillRect(x, h - barH, barW, barH);
       }
 
-      raf = requestAnimationFrame(draw);
+      // A paused player has no business holding a 60 Hz loop open. Keep going
+      // while audio is running, and afterwards only until the analyser's
+      // smoothing has let the bars settle to rest — stopping on the pause
+      // itself would freeze them mid-height.
+      if (player.isPlaying || peak > 0) raf = requestAnimationFrame(draw);
     };
 
-    raf = requestAnimationFrame(draw);
-    onCleanup(() => cancelAnimationFrame(raf));
+    start = () => { if (!raf) raf = requestAnimationFrame(draw); };
+    start();
+    onCleanup(() => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    });
+  });
+
+  // Restart the loop when playback resumes — draw() lets it lapse on pause.
+  // Declared after the onMount above so `start` is assigned by the time this
+  // effect first runs.
+  createEffect(() => {
+    if (player.isPlaying) start();
   });
 
   return <canvas ref={canvas} class="waveform" />;
