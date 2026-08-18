@@ -13,16 +13,22 @@ permissions:
   contents: read
   packages: write
 
+env:
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+
 jobs:
-  build:
+  # The tag is the single source of truth for the release version; refuse to
+  # build if frontend/backend package.json disagree with it (or with each
+  # other) so an image version can never lie about its contents. Split into
+  # its own job so a mismatch fails in seconds instead of after two builds.
+  verify:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      # The tag is the single source of truth for the release version; refuse
-      # to build if frontend/backend package.json disagree with it (or with
-      # each other) so an image version can never lie about its contents.
       - name: Verify package versions match the tag
         id: version
         run: |
@@ -40,43 +46,121 @@ jobs:
           fi
           echo "version=$tag_version" >> "$GITHUB_OUTPUT"
 
+  # One job per architecture, each on a runner of that architecture. arm64 used
+  # to be emulated through QEMU on an amd64 runner, which meant compiling
+  # better-sqlite3 and sharp under emulation — slow, and it eventually broke
+  # outright when a binfmt update started crashing Node with SIGILL. Native
+  # runners remove the emulator from the picture entirely.
+  #
+  # Each job pushes only its own manifest, addressed by digest and untagged;
+  # the merge job below is what binds them to a tag.
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Prepare platform slug
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Set up Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=latest
+          images: ${{ env.REGISTRY_IMAGE }}
           labels: |
             org.opencontainers.image.title=Spindle
             org.opencontainers.image.description=Self-hosted music player
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Native modules (better-sqlite3, sharp) compile under QEMU for
-          # arm64 — layer caching across releases keeps that bearable.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No tag here on purpose: push-by-digest leaves the manifest
+          # untagged so the merge job can point one tag at both platforms.
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Separate cache scopes — a shared scope would have the two
+          # architectures overwrite each other's layers every run.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Bind both per-architecture digests to the release tags as a single OCI
+  # image index. This is what makes `docker pull …:latest` resolve to arm64 on
+  # a Pi and amd64 elsewhere, from one tag. Because it runs last, a tag is
+  # never published unless both architectures built.
+  merge:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            -t "$REGISTRY_IMAGE:$VERSION" \
+            -t "$REGISTRY_IMAGE:latest" \
+            $(printf "$REGISTRY_IMAGE@sha256:%s " *)
+
+      - name: Inspect published image
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: docker buildx imagetools inspect "$REGISTRY_IMAGE:$VERSION"
