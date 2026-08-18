@@ -1,5 +1,5 @@
 import { onCleanup, onMount } from 'solid-js';
-import { usePlayerStore } from '../../store/playerStore';
+import { releaseVisualizer, retainVisualizer, usePlayerStore } from '../../store/playerStore';
 
 const BAR_COUNT = 64;
 
@@ -7,6 +7,12 @@ export function Waveform() {
   const player = usePlayerStore();
   let canvas: HTMLCanvasElement | undefined;
   let raf = 0;
+
+  // Playback only runs through the Web Audio graph when something needs it,
+  // and the analyser this canvas reads is that something. Retaining builds the
+  // graph; releasing lets a later page load go back to the cheaper native path.
+  onMount(() => retainVisualizer());
+  onCleanup(() => releaseVisualizer());
 
   onMount(() => {
     if (!canvas) return;

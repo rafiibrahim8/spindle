@@ -36,9 +36,16 @@ let audioContext: AudioContext | null = null;
 let analyserNode: AnalyserNode | null = null;
 let filters: BiquadFilterNode[] = [];
 const sourceNodes = new Map<HTMLAudioElement, MediaElementAudioSourceNode>();
+/**
+ * How many visualizers are currently mounted. Together with a non-flat EQ this
+ * is the only reason to build the Web Audio graph at all — see
+ * `audioGraphNeeded()`.
+ */
+let visualizerRefs = 0;
 
 const PLAYBACK_SESSION_KEY = 'music-player:playback-session';
 const PLAYBACK_QUEUE_KEY = 'music-player:playback-queue';
+const PLAYBACK_SHUFFLE_KEY = 'music-player:shuffle-bag';
 const POSITION_SAVE_INTERVAL_MS = 10_000;
 let lastPositionSaveAt = 0;
 let restoringSession = false;
@@ -64,6 +71,106 @@ let shuffleBack: number[] = [];
 let shuffleForward: number[] = [];
 /** True while next() / prev() is calling setTrack — tells setTrack to leave the forward stack alone. */
 let shufflePathInProgress = false;
+
+/**
+ * Queue indices still unplayed in the current shuffle cycle, popped from the
+ * tail. Drawing a fresh `Math.random()` index per track samples *with
+ * replacement*: repeats appear after ~sqrt(N) tracks and covering an N-track
+ * queue takes ~N*ln(N) plays, so on a large library a big share of it never
+ * comes up in a listening session. A pre-shuffled bag plays every track
+ * exactly once per cycle, then reshuffles for the next one.
+ */
+let shuffleBag: number[] = [];
+/**
+ * Queue length the bag was built against, or -1 when there is no live bag.
+ * A length mismatch means the queue changed underneath it and the bag has to
+ * be rebuilt.
+ */
+let shuffleBagFor = -1;
+let shuffleBagDirty = true;
+
+function resetShuffleBag(): void {
+  shuffleBag = [];
+  shuffleBagFor = -1;
+  shuffleBagDirty = true;
+}
+
+/** Fresh unbiased permutation of [0, length). */
+function shuffledIndices(length: number): number[] {
+  const arr = Array.from({ length }, (_, i) => i);
+  for (let i = length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/**
+ * Start a new cycle. `avoidFirst` is the currently playing index: it stays in
+ * the bag (so the new cycle still covers it) but is moved off the tail, which
+ * is what keeps a cycle boundary from replaying the same track back-to-back.
+ */
+function refillShuffleBag(length: number, avoidFirst: number): void {
+  const bag = shuffledIndices(length);
+  if (length > 1 && bag[length - 1] === avoidFirst) {
+    const swap = Math.floor(Math.random() * (length - 1));
+    [bag[length - 1], bag[swap]] = [bag[swap], bag[length - 1]];
+  }
+  shuffleBag = bag;
+  shuffleBagFor = length;
+  shuffleBagDirty = true;
+}
+
+/**
+ * Build the bag on demand. Unlike the cycle-boundary refill, the track playing
+ * right now counts as this cycle's first play, so it comes straight back out.
+ */
+function ensureShuffleBag(length: number, current: number): void {
+  if (shuffleBagFor === length) return;
+  refillShuffleBag(length, current);
+  consumeShuffleIndex(current);
+}
+
+/** Drop an index from the bag once it has been played (or jumped to). */
+function consumeShuffleIndex(index: number): void {
+  if (shuffleBagFor < 0) return;
+  const at = shuffleBag.lastIndexOf(index);
+  if (at >= 0) {
+    shuffleBag.splice(at, 1);
+    shuffleBagDirty = true;
+  }
+}
+
+/** Tail entry that is still a legal successor, or -1. Does not mutate. */
+function peekShuffleIndex(length: number, current: number): number {
+  for (let i = shuffleBag.length - 1; i >= 0; i--) {
+    const candidate = shuffleBag[i];
+    if (candidate !== current && candidate >= 0 && candidate < length) return candidate;
+  }
+  return -1;
+}
+
+/**
+ * Next index of the cycle. Returns -1 only when the cycle is exhausted and
+ * `canRecycle` is false (shuffle with repeat off = play the queue through
+ * once, then stop).
+ */
+function drawShuffleIndex(length: number, current: number, canRecycle: boolean): number {
+  ensureShuffleBag(length, current);
+  let picked = -1;
+  while (shuffleBag.length) {
+    const candidate = shuffleBag.pop()!;
+    shuffleBagDirty = true;
+    if (candidate !== current && candidate >= 0 && candidate < length) {
+      picked = candidate;
+      break;
+    }
+  }
+  if (picked >= 0) return picked;
+  if (!canRecycle) return -1;
+  refillShuffleBag(length, current);
+  return shuffleBag.length ? shuffleBag.pop()! : -1;
+}
 
 interface PersistedPlaybackSession {
   currentTrack: Track | null;
@@ -172,11 +279,16 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     if (finalQueue !== playerStore.queue) {
       shuffleBack = [];
       shuffleForward = [];
+      resetShuffleBag();
       setPlayerStore('played', []);
       queueDirty = true;
     } else if (!shufflePathInProgress) {
       shuffleForward = [];
     }
+    // However this track was reached — drawn from the bag, replayed off the
+    // forward stack, or jumped to from the queue panel — it is spent for this
+    // cycle and must not come round again before the reshuffle.
+    consumeShuffleIndex(finalIndex);
     ensureAudioGraph();
     void audioContext?.resume();
     setPlayerStore('audioError', null);
@@ -256,21 +368,25 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
     let nextIndex: number;
     if (shuffle && queue.length > 1) {
-      // Push current onto the back stack. If the user previously prev'd, the
-      // forward stack holds the path they came from — replay that in order
-      // before picking a fresh random.
-      if (queueIndex >= 0) {
-        shuffleBack.push(queueIndex);
-        // A repeat-all shuffle session runs indefinitely — keep the rewind
-        // history bounded.
-        if (shuffleBack.length > 500) shuffleBack.splice(0, shuffleBack.length - 500);
-      }
+      // If the user previously prev'd, the forward stack holds the path they
+      // came from — replay that in order before drawing from the bag.
       if (shuffleForward.length > 0) {
         nextIndex = shuffleForward.pop()!;
       } else {
-        do {
-          nextIndex = Math.floor(Math.random() * queue.length);
-        } while (nextIndex === queueIndex);
+        nextIndex = drawShuffleIndex(queue.length, queueIndex, repeat === 'all');
+        if (nextIndex < 0) {
+          // Every track in the queue has played this cycle and repeat is off.
+          audioEl.pause();
+          setPlayerStore({ isPlaying: false });
+          return;
+        }
+      }
+      // Only now that the move is certain: record where we came from so prev()
+      // can rewind. A repeat-all shuffle session runs indefinitely — keep the
+      // rewind history bounded.
+      if (queueIndex >= 0) {
+        shuffleBack.push(queueIndex);
+        if (shuffleBack.length > 500) shuffleBack.splice(0, shuffleBack.length - 500);
       }
     } else {
       nextIndex = queueIndex + 1;
@@ -326,6 +442,16 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   toggleShuffle() {
     setPlayerStore('shuffle', (s) => !s);
+    // Either direction starts a clean cycle: turning shuffle on shouldn't
+    // inherit a stale bag, and turning it off makes the old one meaningless.
+    resetShuffleBag();
+    shuffleForward = [];
+    // Both directions change which track comes next, so the element holding
+    // the old successor is now buffering the wrong audio. Re-arm it — under
+    // shuffle the bag makes the pick knowable, so the track playing when the
+    // toggle is flipped keeps its gapless transition instead of being the one
+    // song that has to re-fetch from byte 0.
+    preloadNext();
     savePlaybackSession();
   },
 
@@ -351,6 +477,15 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   addToQueue(track) {
     setPlayerStore('queue', (q) => [...q, track]);
+    // Splice the new index somewhere into what's left of the cycle rather than
+    // rebuilding the bag — a rebuild would forget everything already played
+    // and let this session repeat tracks.
+    if (shuffleBagFor >= 0) {
+      const newIndex = playerStore.queue.length - 1;
+      shuffleBag.splice(Math.floor(Math.random() * (shuffleBag.length + 1)), 0, newIndex);
+      shuffleBagFor = playerStore.queue.length;
+      shuffleBagDirty = true;
+    }
     queueDirty = true;
     savePlaybackSession();
   },
@@ -373,6 +508,10 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       state.played = state.played.map(remap);
       shuffleBack = shuffleBack.map(remap);
       shuffleForward = shuffleForward.map(remap);
+      if (shuffleBagFor >= 0) {
+        shuffleBag = shuffleBag.map(remap);
+        shuffleBagDirty = true;
+      }
     }));
     queueDirty = true;
     savePlaybackSession();
@@ -386,6 +525,9 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
       next[index] = clamped;
       return next;
     });
+    // Store first — ensureAudioGraph() reads it to decide whether the graph is
+    // needed, and moving a band off zero is exactly what makes it needed.
+    ensureAudioGraph();
     if (filters[index]) filters[index].gain.value = clamped;
   },
 
@@ -395,10 +537,10 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   },
 
   setEqualizerSettings(values, preset) {
-    ensureAudioGraph();
     const normalized = values.slice(0, 5);
     while (normalized.length < 5) normalized.push(0);
     setPlayerStore({ equalizer: normalized, equalizerPreset: preset });
+    ensureAudioGraph();
     normalized.forEach((value, index) => {
       if (filters[index]) filters[index].gain.value = value;
     });
@@ -474,7 +616,38 @@ function startPlayback(): void {
 // Audio graph — built lazily on first play (browsers require a user gesture).
 // ────────────────────────────────────────────────────────────────────────
 
+/**
+ * Whether anything actually consumes the Web Audio graph right now: a band
+ * pulled off zero, or a mounted visualizer reading the analyser.
+ */
+function audioGraphNeeded(): boolean {
+  return visualizerRefs > 0 || playerStore.equalizer.some((v) => v !== 0);
+}
+
+/**
+ * Build the graph only when something needs it.
+ *
+ * Routing an element through `createMediaElementSource` takes it off the
+ * platform's offloaded decode path and makes playback depend on the Web Audio
+ * render callback, which the main thread feeds. Any main-thread hitch — a
+ * large image decode, a synchronous localStorage write — can then starve it
+ * into an audible dropout. Phones have the least headroom to absorb that, and
+ * with a flat EQ and no visualizer on screen the graph does nothing but add
+ * the exposure. So the default path is a plain <audio> element straight to the
+ * hardware, and the graph gets built the moment it earns its place.
+ *
+ * The routing is one-way: an element can never leave the graph once it has a
+ * source node (Web Audio gives no way to detach one, and disconnecting would
+ * mute the element). Flattening the EQ again therefore keeps the graph for the
+ * rest of the session; the native path comes back on the next page load, since
+ * EQ settings are not persisted.
+ */
 function ensureAudioGraph(): void {
+  if (!audioGraphNeeded()) return;
+  buildAudioGraph();
+}
+
+function buildAudioGraph(): void {
   if (!audioContext) {
     try {
       const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
@@ -514,6 +687,24 @@ function ensureAudioGraph(): void {
   // so each gets exactly one for its lifetime.
   connectElementSource(audioEl);
   connectElementSource(nextAudioEl);
+}
+
+/**
+ * Mount/unmount hooks for visualizers. Retaining builds the graph — callers
+ * must be inside a user gesture (a click that opens the panel), because a
+ * freshly created AudioContext starts suspended and an element wired into a
+ * suspended context is silent until it resumes.
+ */
+export function retainVisualizer(): void {
+  visualizerRefs++;
+  ensureAudioGraph();
+  if (audioContext && audioContext.state !== 'running') void audioContext.resume();
+}
+
+export function releaseVisualizer(): void {
+  visualizerRefs = Math.max(0, visualizerRefs - 1);
+  // Nothing to tear down: the source nodes stay for the element's lifetime.
+  // The count only decides whether a *future* build is warranted.
 }
 
 function connectElementSource(el: HTMLAudioElement): void {
@@ -738,11 +929,18 @@ function preloadNext(): void {
 
   let nextIndex: number;
   if (shuffle && queue.length > 1) {
-    // The shuffled successor is random — preloading queueIndex+1 would
-    // download a full wrong track per song. The one predictable case is a
-    // forward stack from prev(): next() will replay its top.
-    if (!shuffleForward.length) return;
-    nextIndex = shuffleForward[shuffleForward.length - 1];
+    // A bag makes the shuffled successor knowable ahead of time, so shuffle
+    // gets the same gapless preload as linear playback. The forward stack
+    // still wins — next() replays its top before touching the bag.
+    if (shuffleForward.length) {
+      nextIndex = shuffleForward[shuffleForward.length - 1];
+    } else {
+      ensureShuffleBag(queue.length, queueIndex);
+      nextIndex = peekShuffleIndex(queue.length, queueIndex);
+      // Cycle's last track: the successor depends on a reshuffle that hasn't
+      // happened yet (or playback stops), so there's nothing to preload.
+      if (nextIndex < 0) return;
+    }
   } else {
     nextIndex = queueIndex + 1;
     if (nextIndex >= queue.length) {
@@ -783,6 +981,14 @@ export function savePlaybackSession(): void {
         JSON.stringify(playerStore.queue.map((t) => compactTrack(t)))
       );
       queueDirty = false;
+    }
+    // Same treatment for the shuffle bag: it changes once per track, not on
+    // every 10 s position checkpoint. Persisting it is what stops a page
+    // reload from restarting the cycle and re-serving tracks already heard.
+    if (shuffleBagDirty) {
+      if (shuffleBagFor < 0) localStorage.removeItem(PLAYBACK_SHUFFLE_KEY);
+      else localStorage.setItem(PLAYBACK_SHUFFLE_KEY, JSON.stringify({ for: shuffleBagFor, bag: shuffleBag }));
+      shuffleBagDirty = false;
     }
     const blob: Omit<PersistedPlaybackSession, 'queue'> = {
       currentTrack: compactTrack(playerStore.currentTrack),
@@ -825,6 +1031,30 @@ function readPlaybackSession(): PersistedPlaybackSession | null {
 }
 
 /**
+ * Reload the shuffle cycle saved alongside the session. Anything malformed, or
+ * built for a queue of a different length, is discarded — the bag rebuilds
+ * lazily on the next draw.
+ */
+function restoreShuffleBag(queueLength: number): void {
+  resetShuffleBag();
+  try {
+    const raw = localStorage.getItem(PLAYBACK_SHUFFLE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.for !== queueLength || !Array.isArray(parsed.bag)) return;
+    const bag = parsed.bag.filter(
+      (i: unknown) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < queueLength
+    );
+    if (bag.length !== parsed.bag.length) return;
+    shuffleBag = bag;
+    shuffleBagFor = queueLength;
+    shuffleBagDirty = false;    // already matches storage
+  } catch {
+    resetShuffleBag();
+  }
+}
+
+/**
  * Cancels the seek a session restore deferred to `loadedmetadata`. setTrack
  * calls this so a user who picks a new track before the restored one finishes
  * loading can't have the stale restore clobber the fresh playback.
@@ -859,6 +1089,7 @@ export function restorePlaybackSession(): void {
     completedReported: knownDuration > 0 && target / knownDuration >= 0.8
   });
   restoringSession = false;
+  restoreShuffleBag(playerStore.queue.length);
   updateMediaSession(track);
 
   // Metadata-only until the user presses play — a page load shouldn't
