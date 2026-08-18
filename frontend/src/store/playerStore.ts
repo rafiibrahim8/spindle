@@ -324,6 +324,9 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     });
     nextPreloadedFor = null;
     savePlaybackSession();
+    // Usually a no-op this early — nothing is buffered ahead yet. It fires
+    // immediately only when the new track arrived already fully buffered
+    // (a preloaded handoff), which is exactly when it's free.
     preloadNext();
   },
 
@@ -849,10 +852,11 @@ function attachAudioElementListeners(el: HTMLAudioElement): void {
     // Throttled OS position state push (~1 Hz).
     updateMediaPositionState();
 
-    // Gapless preload when ≤5 s remain.
-    if (duration && duration - audioEl.currentTime <= 5) {
-      preloadNext();
-    }
+    // Gapless preload. preloadNext() decides for itself whether the connection
+    // can afford it, so this just gives it a chance to start as soon as the
+    // current track's buffer runs far enough ahead — rather than at a fixed
+    // point that might be too late on a slow link, or wastefully early.
+    preloadNext();
   });
 
   el.addEventListener('play', () => {
@@ -923,9 +927,59 @@ function attachAudioElementListeners(el: HTMLAudioElement): void {
 // Gapless preload
 // ────────────────────────────────────────────────────────────────────────
 
+/**
+ * Seconds of the current track that must already be buffered ahead of the
+ * playhead before it is worth spending bandwidth on the next one.
+ */
+const PRELOAD_BUFFER_AHEAD_S = 25;
+
+/** How much contiguous audio is buffered ahead of the playhead, in seconds. */
+function bufferedAhead(el: HTMLAudioElement): number {
+  const at = el.currentTime;
+  const ranges = el.buffered;
+  for (let i = 0; i < ranges.length; i++) {
+    // A small tolerance: the playhead sits fractionally behind the range start
+    // right after a seek.
+    if (at >= ranges.start(i) - 0.5 && at <= ranges.end(i)) return ranges.end(i) - at;
+  }
+  return 0;
+}
+
+/**
+ * Whether fetching the next track right now is affordable.
+ *
+ * `nextAudioEl.preload = 'auto'` downloads a whole file. Firing that the
+ * instant the current track starts meant two full-size downloads competing for
+ * the same connection for the entire track — fine on a LAN, a direct cause of
+ * mid-track underruns on cellular.
+ *
+ * So: never on a metered or 2G connection, and otherwise only once the current
+ * track is far enough ahead of the playhead that the second download has
+ * spare capacity to use. Near the end of a track that condition is satisfied
+ * by the whole file being buffered, which is what keeps the gapless handoff
+ * working. If a connection can only just sustain one stream, it never opens —
+ * which is the correct answer, not a missing feature.
+ */
+function preloadAffordable(): boolean {
+  const conn = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  if (conn?.saveData) return false;
+  if (conn?.effectiveType === '2g' || conn?.effectiveType === 'slow-2g') return false;
+
+  const ahead = bufferedAhead(audioEl);
+  const duration = audioEl.duration;
+  // Buffered to the end — there is nothing left for the two to contend over.
+  if (Number.isFinite(duration) && duration > 0 && audioEl.currentTime + ahead >= duration - 0.5) {
+    return true;
+  }
+  return ahead >= PRELOAD_BUFFER_AHEAD_S;
+}
+
 function preloadNext(): void {
   const { queue, queueIndex, shuffle, repeat } = playerStore;
   if (queueIndex < 0 || !queue.length) return;
+  if (!preloadAffordable()) return;
 
   let nextIndex: number;
   if (shuffle && queue.length > 1) {
