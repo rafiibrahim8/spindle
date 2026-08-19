@@ -62,6 +62,13 @@ export interface TrackMeta {
   bitrate: number | null;
   sampleRate: number | null;
   codec: string | null;
+  channels: number | null;
+  trackTotal: number | null;
+  discTotal: number | null;
+  releaseDate: string | null;
+  isrc: string | null;
+  /** Official audio source webpage — a Spotify or YouTube Music URL here. */
+  woas: string | null;
   artPath: string | null;
   syncedLrc: string | null;
   unsyncedText: string | null;

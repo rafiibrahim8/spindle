@@ -41,13 +41,22 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const year = typeof tags.year === 'number' ? tags.year : null;
 
   const trackNumber = tags.track?.no ?? null;
+  const trackTotal = tags.track?.of ?? null;
   const discNumber = tags.disk?.no ?? null;
+  const discTotal = tags.disk?.of ?? null;
   const genre = (tags.genre && tags.genre[0]) || null;
+  // `year` above is the integer for sorting; this keeps the full date when the
+  // file has one ("2022-02-10").
+  const releaseDate = typeof tags.date === 'string' && tags.date.trim() ? tags.date.trim() : null;
+  const isrc = (Array.isArray(tags.isrc) && tags.isrc[0]) || null;
 
   const duration = typeof fmt.duration === 'number' ? fmt.duration : null;
   const bitrate = typeof fmt.bitrate === 'number' ? Math.round(fmt.bitrate / 1000) : null;
   const sampleRate = typeof fmt.sampleRate === 'number' ? fmt.sampleRate : null;
   const codec = (fmt.codec || fmt.container || null)?.toString().toLowerCase() || null;
+  const channels = typeof fmt.numberOfChannels === 'number' ? fmt.numberOfChannels : null;
+
+  const woas = readNativeTag(meta, 'WOAS');
 
   const picture = pickFrontCover(tags.picture);
   const artPath = picture ? await cacheAlbumArt(picture) : null;
@@ -80,10 +89,42 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
     bitrate,
     sampleRate,
     codec,
+    channels,
+    trackTotal,
+    discTotal,
+    releaseDate,
+    isrc,
+    woas,
     artPath,
     syncedLrc: resolvedSynced,
     unsyncedText: resolvedUnsynced
   };
+}
+
+/**
+ * Read a tag by its raw name across every native tag format in the file.
+ * Needed for fields music-metadata does not normalise into `common` — WOAS is
+ * a Vorbis comment key here and an ID3 frame id in MP3s, and neither surfaces
+ * as a common field.
+ */
+function readNativeTag(
+  meta: Awaited<ReturnType<typeof parseFile>>,
+  wanted: string
+): string | null {
+  const target = wanted.toUpperCase();
+  for (const frames of Object.values(meta.native || {})) {
+    for (const frame of frames) {
+      if (!frame || !frame.id || String(frame.id).toUpperCase() !== target) continue;
+      const value = typeof frame.value === 'string'
+        ? frame.value
+        : (frame.value && typeof frame.value === 'object' && 'url' in frame.value
+            ? String((frame.value as { url?: unknown }).url ?? '')
+            : null);
+      const trimmed = value?.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return null;
 }
 
 function pickFrontCover(pics: IPicture[] | undefined): IPicture | null {

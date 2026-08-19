@@ -1279,3 +1279,125 @@ button.ghost:hover { color: var(--text); background: var(--surface-2); }
   /* Sync overlay — fit on small viewports */
   .sync-card { width: min(380px, 92vw); padding: 20px; }
 }
+
+/* ─────────────────────────────────────────────────── Track info panel */
+/* Centred modal on desktop; bottom sheet once the Now Playing panel goes
+   full-screen on narrow viewports. Above z-index 1000 so it clears the panel
+   it is opened from. */
+.now-playing-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+.now-playing-title-row h2 { margin: 0; }
+.track-info-toggle {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+.track-info-toggle:hover { opacity: 1; }
+
+.track-info-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1100;
+}
+.track-info-sheet {
+  position: fixed;
+  z-index: 1101;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1, #16181c);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.track-info-sheet header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+.track-info-sheet header h3 { margin: 0; font-size: 15px; }
+.track-info-empty { padding: 24px 16px; text-align: center; }
+
+.track-info-body {
+  padding: 14px 16px 20px;
+  overflow-y: auto;
+  /* The sheet can be taller than the viewport on a short phone in landscape;
+     momentum scrolling keeps it usable. */
+  -webkit-overflow-scrolling: touch;
+}
+
+.track-info-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  margin-bottom: 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #08130c;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+}
+.track-info-link:hover { filter: brightness(1.08); }
+
+.track-info-group + .track-info-group { margin-top: 16px; }
+.track-info-group h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.track-info-group dl { margin: 0; }
+.track-info-row {
+  display: grid;
+  grid-template-columns: 116px 1fr;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 13px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.05));
+}
+.track-info-row:first-child { border-top: none; }
+.track-info-row dt { color: var(--muted); }
+.track-info-row dd {
+  margin: 0;
+  /* WOAS URLs are long and unbreakable; let them wrap rather than widen the
+     sheet or overflow it. */
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .track-info-sheet {
+    left: 0;
+    top: auto;
+    bottom: 0;
+    transform: none;
+    width: 100%;
+    max-height: 82vh;
+    border-radius: var(--radius-lg, 14px) var(--radius-lg, 14px) 0 0;
+    border-bottom: none;
+    /* Clear the home indicator on iOS. */
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .track-info-row { grid-template-columns: 100px 1fr; }
+}
+
+.settings-subnote {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+}

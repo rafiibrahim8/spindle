@@ -27,7 +27,9 @@ router.post('/start', (req, res) => {
     res.status(409).json({ error: 'Sync already running', jobId: activeJobId });
     return;
   }
-  const jobId = createSyncJob(musicRoot);
+  // Opt-in full re-read; ordinary syncs skip unchanged files by design.
+  const force = payloadForce(req.body);
+  const jobId = createSyncJob(musicRoot, force);
   res.json({ jobId });
 });
 
@@ -90,5 +92,9 @@ router.get('/progress/:jobId', (req, res) => {
     job.emitter.off('event', onEvent);
   });
 });
+
+function payloadForce(body: unknown): boolean {
+  return Boolean(body && typeof body === 'object' && (body as { force?: unknown }).force === true);
+}
 
 export default router;

@@ -1,6 +1,7 @@
 export interface Track {
   id: number;
   filePath?: string;
+  fileSize?: number;
   title: string | null;
   artist: string | null;
   albumArtist?: string | null;
@@ -13,6 +14,13 @@ export interface Track {
   bitrate: number | null;
   sampleRate?: number | null;
   codec: string | null;
+  channels?: number | null;
+  trackTotal?: number | null;
+  discTotal?: number | null;
+  releaseDate?: string | null;
+  isrc?: string | null;
+  /** Official audio source webpage from the file's tags. Untrusted input. */
+  woas?: string | null;
   hasSyncedLyrics?: number;
   hasUnsyncedLyrics?: number;
   liked?: number;

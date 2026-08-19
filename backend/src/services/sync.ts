@@ -28,7 +28,13 @@ let latestRunningJobId: string | null = null;
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 const PERSIST_CHUNK_SIZE = 200;
 
-export function createSyncJob(rootDir: string): string {
+/**
+ * `force` re-reads tags from every file instead of trusting the
+ * size/mtime/hash short-circuit. Needed whenever the extractor learns to read
+ * a field it previously ignored: the files have not changed, so an ordinary
+ * sync skips them and the new columns would stay NULL forever.
+ */
+export function createSyncJob(rootDir: string, force = false): string {
   const id = randomUUID();
   const emitter = new EventEmitter();
   const record: JobRecord = { id, emitter, status: 'running', events: [] };
@@ -36,7 +42,7 @@ export function createSyncJob(rootDir: string): string {
   latestRunningJobId = id;
 
   // Run async, do not block.
-  void runSync(rootDir, record)
+  void runSync(rootDir, record, force)
     .catch((err) => {
       record.status = 'error';
       record.error = (err as Error).message;
@@ -71,7 +77,7 @@ export function getActiveJobId(): string | null {
   return latestRunningJobId;
 }
 
-async function runSync(rootDir: string, record: JobRecord): Promise<void> {
+async function runSync(rootDir: string, record: JobRecord, force = false): Promise<void> {
   const db = getDb();
   resetUpsertCaches();
   const emit = (event: SyncEvent) => {
@@ -145,6 +151,11 @@ async function runSync(rootDir: string, record: JobRecord): Promise<void> {
     try {
       if (!prior) {
         toAdd.push(await extractMetadata(filePath));
+        continue;
+      }
+
+      if (force) {
+        toUpdate.push({ id: prior.id, meta: await extractMetadata(filePath) });
         continue;
       }
 
@@ -314,14 +325,16 @@ function insertTrack(meta: TrackMeta): number {
       file_path, file_hash, file_size, file_mtime,
       title, artist, album_artist, album, year,
       track_number, disc_number, genre, duration,
-      bitrate, sample_rate, codec,
+      bitrate, sample_rate, codec, channels,
+      track_total, disc_total, release_date, isrc, woas,
       has_synced_lyrics, has_unsynced_lyrics,
       album_id, artist_id, last_scanned
     ) VALUES (
       @filePath, @fileHash, @fileSize, @fileMtime,
       @title, @artist, @albumArtist, @album, @year,
       @trackNumber, @discNumber, @genre, @duration,
-      @bitrate, @sampleRate, @codec,
+      @bitrate, @sampleRate, @codec, @channels,
+      @trackTotal, @discTotal, @releaseDate, @isrc, @woas,
       @hasSynced, @hasUnsynced,
       @albumId, @artistId, @lastScanned
     )
@@ -343,6 +356,12 @@ function insertTrack(meta: TrackMeta): number {
     bitrate: meta.bitrate,
     sampleRate: meta.sampleRate,
     codec: meta.codec,
+    channels: meta.channels,
+    trackTotal: meta.trackTotal,
+    discTotal: meta.discTotal,
+    releaseDate: meta.releaseDate,
+    isrc: meta.isrc,
+    woas: meta.woas,
     hasSynced: meta.syncedLrc ? 1 : 0,
     hasUnsynced: meta.unsyncedText ? 1 : 0,
     albumId,
@@ -376,6 +395,12 @@ function updateTrack(id: number, meta: TrackMeta): void {
       bitrate = @bitrate,
       sample_rate = @sampleRate,
       codec = @codec,
+      channels = @channels,
+      track_total = @trackTotal,
+      disc_total = @discTotal,
+      release_date = @releaseDate,
+      isrc = @isrc,
+      woas = @woas,
       has_synced_lyrics = @hasSynced,
       has_unsynced_lyrics = @hasUnsynced,
       album_id = @albumId,
@@ -400,6 +425,12 @@ function updateTrack(id: number, meta: TrackMeta): void {
     bitrate: meta.bitrate,
     sampleRate: meta.sampleRate,
     codec: meta.codec,
+    channels: meta.channels,
+    trackTotal: meta.trackTotal,
+    discTotal: meta.discTotal,
+    releaseDate: meta.releaseDate,
+    isrc: meta.isrc,
+    woas: meta.woas,
     hasSynced: meta.syncedLrc ? 1 : 0,
     hasUnsynced: meta.unsyncedText ? 1 : 0,
     albumId,

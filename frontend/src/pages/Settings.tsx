@@ -137,6 +137,13 @@ export function Settings() {
           <h2>Library</h2>
           <p class="muted">Re-scan your music root to pick up new, modified, or removed files.</p>
           <SyncButton />
+          <p class="muted settings-subnote">
+            A normal sync skips files whose size and contents haven't changed, so
+            it won't pick up tags Spindle has only recently learned to read. A
+            full rescan re-reads every file — slower, and only needed after an
+            upgrade says so.
+          </p>
+          <SyncButton force label="Full rescan" busyLabel="Rescanning…" />
         </section>
       </div>
     </div>

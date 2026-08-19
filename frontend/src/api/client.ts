@@ -121,8 +121,8 @@ export const api = {
   },
 
   // Sync
-  startSync(musicRoot: string): Promise<{ jobId: string }> {
-    return request('/sync/start', { method: 'POST', body: JSON.stringify({ musicRoot }) });
+  startSync(musicRoot: string, force = false): Promise<{ jobId: string }> {
+    return request('/sync/start', { method: 'POST', body: JSON.stringify({ musicRoot, force }) });
   },
   getSyncStatus(): Promise<SyncStatus> {
     return request('/sync/status');

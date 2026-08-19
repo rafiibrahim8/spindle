@@ -41,6 +41,26 @@ CREATE TABLE IF NOT EXISTS tracks (
     bitrate       INTEGER,
     sample_rate   INTEGER,
     codec         TEXT,
+    channels      INTEGER,
+
+    -- Totals pair with track_number / disc_number so the info panel can say
+    -- "3 of 12" rather than a bare "3".
+    track_total   INTEGER,
+    disc_total    INTEGER,
+
+    -- Full release date ("2022-02-10") for display; the integer `year` above
+    -- is what sorting and album grouping use.
+    release_date  TEXT,
+
+    -- International Standard Recording Code: per-recording identity that
+    -- survives re-encoding and re-tagging.
+    isrc          TEXT,
+
+    -- Official audio source webpage from the file's tags — a Spotify or
+    -- YouTube Music URL for anything downloaded from those. Not a `common`
+    -- field in music-metadata; read from the raw Vorbis comment / ID3 frame.
+    -- Untrusted input: validate the scheme before putting it in an href.
+    woas          TEXT,
 
     has_synced_lyrics   INTEGER DEFAULT 0,
     has_unsynced_lyrics INTEGER DEFAULT 0,

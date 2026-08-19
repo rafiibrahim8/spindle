@@ -1,6 +1,7 @@
 import { useNavigate } from '@solidjs/router';
 import { ListMusic, Mic2, Music, X } from 'lucide-solid';
-import { Match, Show, Switch } from 'solid-js';
+import { Info } from 'lucide-solid';
+import { Match, Show, Switch, createSignal } from 'solid-js';
 import { openAlbum, openArtist } from '../../store/navStore';
 import { usePlayerStore } from '../../store/playerStore';
 import { Controls } from '../Player/Controls';
@@ -8,11 +9,13 @@ import { ProgressBar } from '../Player/ProgressBar';
 import { QueueView } from '../Queue/QueuePanel';
 import { AlbumArt } from './AlbumArt';
 import { LyricsDisplay } from './LyricsDisplay';
+import { TrackInfo } from './TrackInfo';
 import { Waveform } from './Waveform';
 
 export function NowPlayingPanel() {
   const player = usePlayerStore();
   const navigate = useNavigate();
+  const [infoOpen, setInfoOpen] = createSignal(false);
   const tabClass = (tab: 'album' | 'lyrics' | 'queue') =>
     player.panelTab === tab ? 'active' : '';
 
@@ -73,7 +76,19 @@ export function NowPlayingPanel() {
                 size="xl"
               />
               <div class="now-playing-meta">
-                <h2>{player.currentTrack?.title ?? '—'}</h2>
+                <div class="now-playing-title-row">
+                  <h2>{player.currentTrack?.title ?? '—'}</h2>
+                  <Show when={player.currentTrack}>
+                    <button
+                      class="ctl track-info-toggle"
+                      onClick={() => setInfoOpen(true)}
+                      aria-label="Track details"
+                      title="Track details"
+                    >
+                      <Info size={16} />
+                    </button>
+                  </Show>
+                </div>
                 <button
                   type="button"
                   class="link-text"
@@ -109,6 +124,9 @@ export function NowPlayingPanel() {
           </Match>
         </Switch>
       </aside>
+      <Show when={infoOpen() && player.currentTrack}>
+        <TrackInfo trackId={player.currentTrack!.id} onClose={() => setInfoOpen(false)} />
+      </Show>
     </Show>
   );
 }

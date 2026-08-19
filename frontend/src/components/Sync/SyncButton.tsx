@@ -13,7 +13,19 @@ interface SyncSummary {
   failed: number;
 }
 
-export function SyncButton() {
+interface SyncButtonProps {
+  /**
+   * Re-read tags from every file instead of skipping ones whose size, mtime
+   * and hash are unchanged. Needed after the extractor learns to read a field
+   * it previously ignored — an ordinary sync would skip the whole library and
+   * the new columns would stay empty.
+   */
+  force?: boolean;
+  label?: string;
+  busyLabel?: string;
+}
+
+export function SyncButton(props: SyncButtonProps = {}) {
   const queryClient = useQueryClient();
   const [open, setOpen] = createSignal(false);
   const [phase, setPhase] = createSignal<string>('Idle');
@@ -124,7 +136,7 @@ export function SyncButton() {
 
     let jobId: string;
     try {
-      const job = await api.startSync(root);
+      const job = await api.startSync(root, props.force ?? false);
       jobId = job.jobId;
     } catch (err) {
       setError((err as Error).message);
@@ -156,14 +168,22 @@ export function SyncButton() {
     <>
       <button class="sync-button" onClick={handleClick}>
         <RefreshCw size={16} class={running() ? 'spin' : ''} />
-        <span>{running() ? 'Syncing…' : 'Sync'}</span>
+        <span>
+          {running()
+            ? props.busyLabel ?? 'Syncing…'
+            : props.label ?? 'Sync'}
+        </span>
       </button>
 
       <Show when={open()}>
         <Portal>
         <div class="sync-overlay" role="dialog" aria-modal="true">
           <div class="sync-card">
-            <h3>{summary() ? 'Sync complete' : 'Syncing library'}</h3>
+            <h3>
+              {summary()
+                ? 'Sync complete'
+                : props.force ? 'Re-reading every file' : 'Syncing library'}
+            </h3>
             <p class="sync-phase">{phase()}</p>
             <div class="sync-progress">
               <div class="sync-progress-fill" style={{ width: `${percent()}%` }} />
