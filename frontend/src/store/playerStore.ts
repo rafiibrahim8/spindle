@@ -307,6 +307,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     } else {
       audioEl.src = api.streamUrl(track.id);
     }
+    cancelVolumeRamp();
     audioEl.volume = playerStore.isMuted ? 0 : playerStore.volume;
     startPlayback();
     // Don't count the play yet — wait until the user has actually heard ≥30 s
@@ -465,6 +466,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   setVolume(volume) {
     const clamped = Math.min(1, Math.max(0, volume));
+    cancelVolumeRamp();
     audioEl.volume = clamped;
     try { localStorage.setItem('volume', String(clamped)); } catch {}
     setPlayerStore({ volume: clamped, isMuted: clamped === 0 });
@@ -473,6 +475,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
 
   toggleMute() {
     const next = !playerStore.isMuted;
+    cancelVolumeRamp();
     audioEl.volume = next ? 0 : playerStore.volume;
     setPlayerStore('isMuted', next);
     savePlaybackSession();
@@ -642,15 +645,22 @@ function audioGraphNeeded(): boolean {
  * The routing is one-way: an element can never leave the graph once it has a
  * source node (Web Audio gives no way to detach one, and disconnecting would
  * mute the element). Flattening the EQ again therefore keeps the graph for the
- * rest of the session; the native path comes back on the next page load, since
- * EQ settings are not persisted.
+ * rest of the session. Note the EQ is stored server-side and reapplied by
+ * App.tsx on load, so a saved non-flat EQ rebuilds the graph on every visit —
+ * only a genuinely flat EQ keeps the native path.
  */
 function ensureAudioGraph(): void {
   if (!audioGraphNeeded()) return;
-  buildAudioGraph();
+  createAudioContextIfMissing();
+  attachElementSources();
 }
 
-function buildAudioGraph(): void {
+/**
+ * The context, filter chain and analyser on their own are inaudible — they
+ * touch no element — so this half is safe to run synchronously inside the user
+ * gesture that needs it, which is also what lets resume() succeed.
+ */
+function createAudioContextIfMissing(): void {
   if (!audioContext) {
     try {
       const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
@@ -685,11 +695,89 @@ function buildAudioGraph(): void {
       return;
     }
   }
-  // Both elements feed the same filter chain; the inactive one is paused and
-  // therefore silent. An element can only ever have one MediaElementSource,
-  // so each gets exactly one for its lifetime.
-  connectElementSource(audioEl);
-  connectElementSource(nextAudioEl);
+}
+
+/**
+ * Route both elements into the filter chain. This is the audible half:
+ * `createMediaElementSource` on an element that is *playing* takes its output
+ * off the platform's audio path and re-establishes it through the graph, which
+ * is heard as a click or a brief drop. It bit exactly once per session — the
+ * first time the Now Playing panel was opened mid-track — because the source
+ * nodes are cached per element for their lifetime.
+ *
+ * So when the active element is live, duck it to silence first, switch, then
+ * ramp back. The discontinuity still happens; it just happens at zero
+ * amplitude where there is nothing to hear.
+ */
+function attachElementSources(): void {
+  if (!audioContext) return;
+  if (sourceNodes.has(audioEl) && sourceNodes.has(nextAudioEl)) return;
+
+  const el = audioEl;
+  const connectBoth = () => {
+    // Both elements feed the same filter chain; the inactive one is paused and
+    // therefore silent. An element can only ever have one MediaElementSource,
+    // so each gets exactly one for its lifetime.
+    connectElementSource(audioEl);
+    connectElementSource(nextAudioEl);
+  };
+
+  if (el.paused || el.volume === 0) {
+    connectBoth();
+    return;
+  }
+
+  const target = el.volume;
+  rampVolume(el, target, 0, FADE_OUT_MS, () => {
+    connectBoth();
+    rampVolume(el, 0, target, FADE_IN_MS);
+  });
+}
+
+/** Fade-out is short; fade-in is longer so the return is the unnoticeable half. */
+const FADE_OUT_MS = 90;
+const FADE_IN_MS = 220;
+
+/**
+ * Linear volume ramp on the element itself. Deliberately not a GainNode: the
+ * whole point is to be silent *before* the graph exists, so the fade has to
+ * live outside it.
+ *
+ * Anything that sets volume directly — the slider, mute, a track change —
+ * supersedes a ramp in flight via `cancelVolumeRamp`, so the two can't fight
+ * over the property. A superseded ramp still runs its `done` callback: the
+ * attach it guards has to happen either way, and the caller that took over the
+ * volume is itself a moment where a discontinuity goes unnoticed.
+ */
+let volumeRampToken = 0;
+
+function cancelVolumeRamp(): void {
+  volumeRampToken++;
+}
+
+function rampVolume(
+  el: HTMLAudioElement,
+  from: number,
+  to: number,
+  durationMs: number,
+  done?: () => void
+): void {
+  const token = ++volumeRampToken;
+  const started = performance.now();
+  const step = () => {
+    if (token !== volumeRampToken) {
+      done?.();
+      return;
+    }
+    const progress = Math.min(1, (performance.now() - started) / durationMs);
+    el.volume = Math.max(0, Math.min(1, from + (to - from) * progress));
+    if (progress < 1) {
+      requestAnimationFrame(step);
+      return;
+    }
+    done?.();
+  };
+  step();
 }
 
 /**
@@ -700,8 +788,13 @@ function buildAudioGraph(): void {
  */
 export function retainVisualizer(): void {
   visualizerRefs++;
-  ensureAudioGraph();
+  if (!audioGraphNeeded()) return;
+  // Context first and synchronously: it is inaudible, and resume() has to
+  // happen while the caller's user gesture is still on the stack.
+  createAudioContextIfMissing();
   if (audioContext && audioContext.state !== 'running') void audioContext.resume();
+  // Routing is the audible part, and ducks itself if audio is live.
+  attachElementSources();
 }
 
 export function releaseVisualizer(): void {
