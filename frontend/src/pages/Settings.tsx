@@ -26,6 +26,7 @@ export function Settings() {
       queryClient.setQueryData(['settings'], saved);
       applyAccent(saved.accent);
       player.setEqualizerSettings(saved.equalizer, saved.equalizerPreset);
+      player.setVisualizerEnabled(saved.visualizer);
     }
   }));
 
@@ -47,6 +48,13 @@ export function Settings() {
       equalizer: player.equalizer,
       equalizerPreset: player.equalizerPreset
     });
+  };
+
+  // The PUT merges over stored settings, so omitted fields keep their value —
+  // only the toggle itself needs sending.
+  const saveVisualizer = (enabled: boolean) => {
+    player.setVisualizerEnabled(enabled);
+    mutation.mutate({ visualizer: enabled });
   };
 
   const savePreset = (preset: string) => {
@@ -97,6 +105,32 @@ export function Settings() {
             )}</For>
           </div>
           <Equalizer compact />
+        </section>
+
+        <section class="settings-card">
+          <h2>Visualizer</h2>
+          <p class="muted">
+            Draws a waveform in the Now Playing panel. Off by default: reading the
+            audio for it routes playback through the browser's Web Audio graph,
+            which gives up the low-power decode path for the rest of the session
+            and can make playback more prone to stutter on phones.
+          </p>
+          <div class="preset-row">
+            <button
+              class={!player.visualizerEnabled ? 'active' : ''}
+              onClick={() => saveVisualizer(false)}
+              disabled={mutation.isPending}
+            >
+              Off
+            </button>
+            <button
+              class={player.visualizerEnabled ? 'active' : ''}
+              onClick={() => saveVisualizer(true)}
+              disabled={mutation.isPending}
+            >
+              On
+            </button>
+          </div>
         </section>
 
         <section class="settings-card settings-sync-card">

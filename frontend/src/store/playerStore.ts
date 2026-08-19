@@ -202,6 +202,7 @@ interface PlayerStateActions {
   setEqualizerBand: (index: number, value: number) => void;
   applyEqualizerPreset: (preset: string) => void;
   setEqualizerSettings: (values: number[], preset: string) => void;
+  setVisualizerEnabled: (enabled: boolean) => void;
   setShowNowPlaying: (open: boolean) => void;
   setPanelTab: (tab: PanelTab) => void;
   toggleLyrics: () => void;
@@ -236,6 +237,12 @@ interface PlayerState extends PlayerStateActions {
   panelTab: PanelTab;
   equalizer: number[];
   equalizerPreset: string;
+  /**
+   * Opt-in visualizer. Gates whether the Now Playing panel renders its
+   * waveform, and therefore whether the Web Audio graph is ever built for a
+   * user with a flat EQ — see audioGraphNeeded().
+   */
+  visualizerEnabled: boolean;
 }
 
 function readNumberLs(key: string, fallback: number): number {
@@ -264,6 +271,7 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
   panelTab: 'album',
   equalizer: equalizerPresets.Flat.slice(),
   equalizerPreset: 'Flat',
+  visualizerEnabled: false,
 
   setTrack(track, queue, index = 0) {
     cancelPendingRestoreSeek();
@@ -550,6 +558,10 @@ const [playerStore, setPlayerStore] = createStore<PlayerState>({
     normalized.forEach((value, index) => {
       if (filters[index]) filters[index].gain.value = value;
     });
+  },
+
+  setVisualizerEnabled(enabled) {
+    setPlayerStore('visualizerEnabled', enabled);
   },
 
   setShowNowPlaying(open) {

@@ -49,6 +49,7 @@ function AppShell(props: { children?: JSX.Element }) {
     try { localStorage.setItem('accent', accent); } catch {}
     if (settings.data) {
       player.setEqualizerSettings(settings.data.equalizer, settings.data.equalizerPreset);
+      player.setVisualizerEnabled(settings.data.visualizer);
     }
   });
 

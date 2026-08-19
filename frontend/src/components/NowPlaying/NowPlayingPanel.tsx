@@ -91,7 +91,12 @@ export function NowPlayingPanel() {
                   {player.currentTrack?.album ?? ''}
                 </button>
               </div>
-              <Waveform />
+              {/* Opt-in. Rendering it retains the Web Audio graph, which
+                  reroutes playback off the platform's offloaded decode path
+                  for the rest of the session — so it stays off by default. */}
+              <Show when={player.visualizerEnabled}>
+                <Waveform />
+              </Show>
               <ProgressBar />
               <Controls />
             </div>

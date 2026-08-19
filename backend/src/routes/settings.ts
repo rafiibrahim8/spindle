@@ -7,12 +7,21 @@ interface UserSettings {
   accent: string;
   equalizerPreset: string;
   equalizer: number[];
+  /**
+   * Whether the Now Playing panel draws its waveform. Off by default, and the
+   * default matters: the analyser it reads only exists if audio is routed
+   * through the Web Audio graph, which permanently takes both audio elements
+   * off the platform's offloaded decode path for the rest of the session. A
+   * decorative bar chart is not worth that trade unless it is asked for.
+   */
+  visualizer: boolean;
 }
 
 const defaults: UserSettings = {
   accent: '#1ed760',
   equalizerPreset: 'Flat',
-  equalizer: [0, 0, 0, 0, 0]
+  equalizer: [0, 0, 0, 0, 0],
+  visualizer: false
 };
 
 router.get('/', (_req, res) => {
@@ -32,6 +41,9 @@ router.put('/', (req, res) => {
   if (Array.isArray(payload.equalizer) && payload.equalizer.length === 5) {
     next.equalizer = payload.equalizer.map((value) => clamp(Number(value), -12, 12));
   }
+  if (typeof payload.visualizer === 'boolean') {
+    next.visualizer = payload.visualizer;
+  }
 
   const db = getDb();
   const write = db.transaction(() => {
@@ -46,6 +58,7 @@ router.put('/', (req, res) => {
     stmt.run('accent', next.accent, now);
     stmt.run('equalizerPreset', next.equalizerPreset, now);
     stmt.run('equalizer', JSON.stringify(next.equalizer), now);
+    stmt.run('visualizer', next.visualizer ? '1' : '0', now);
   });
   write();
 
@@ -62,7 +75,9 @@ function readSettings(): UserSettings {
   return {
     accent: validateAccent(map.get('accent')),
     equalizerPreset: map.get('equalizerPreset') || defaults.equalizerPreset,
-    equalizer: parseEqualizer(map.get('equalizer'))
+    equalizer: parseEqualizer(map.get('equalizer')),
+    // Absent key means never configured, which must read as off.
+    visualizer: map.get('visualizer') === '1'
   };
 }
 

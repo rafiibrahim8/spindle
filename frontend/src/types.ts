@@ -64,6 +64,7 @@ export interface UserSettings {
   accent: string;
   equalizerPreset: string;
   equalizer: number[];
+  visualizer: boolean;
 }
 
 export interface SyncStatus {
