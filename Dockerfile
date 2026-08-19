@@ -4,10 +4,21 @@
 # Compiles native modules (better-sqlite3, sharp), builds backend (tsc) and
 # frontend (Vite), then produces a self-contained backend deploy directory
 # with only its production dependencies via `pnpm deploy --prod`.
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
-# better-sqlite3 + sharp need a toolchain. vips-dev for sharp at build time.
-RUN apk add --no-cache python3 make g++ vips-dev pkgconfig
+# sharp ships its own libvips inside @img/sharp-linuxmusl-*, so there is no
+# vips-dev here and no pkgconfig to find one. Left to its own devices sharp
+# would notice Alpine's system libvips (8.18.2 on this base), try to build
+# against it via node-gyp, fail for want of node-addon-api, and fall back to
+# the bundled 8.15.3 anyway — wasted build work and a needless dependency on
+# whatever version Alpine happens to ship. Skipping the detection makes the
+# outcome the one it reaches regardless, deterministically.
+ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
+
+# Kept for better-sqlite3: it has a musl prebuild for every Node ABI this
+# image targets, but the toolchain is the difference between a slow build and
+# a failed one if that ever stops being true.
+RUN apk add --no-cache python3 make g++
 
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
@@ -40,10 +51,11 @@ RUN pnpm --filter frontend run build
 RUN pnpm --filter backend deploy --prod /out/backend
 
 # ──────────────────────────────────────────────────────────── runtime
-FROM node:20-alpine
+FROM node:22-alpine
 
-# vips runtime only (no -dev / no toolchain) — keeps the image small.
-RUN apk add --no-cache vips tini
+# No vips package: sharp carries its own libvips in node_modules, so the
+# system one would only be dead weight.
+RUN apk add --no-cache tini
 
 WORKDIR /app
 
