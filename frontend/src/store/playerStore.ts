@@ -651,14 +651,16 @@ function audioGraphNeeded(): boolean {
  */
 function ensureAudioGraph(): void {
   if (!audioGraphNeeded()) return;
-  createAudioContextIfMissing();
   attachElementSources();
 }
 
 /**
- * The context, filter chain and analyser on their own are inaudible — they
- * touch no element — so this half is safe to run synchronously inside the user
- * gesture that needs it, which is also what lets resume() succeed.
+ * Create the context, filter chain and analyser. Cheap in CPU terms except for
+ * `new AudioContext()`, which opens an output stream via the browser's audio
+ * service — and opening a second stream can make the device reconfigure,
+ * which is capable of disturbing audio the process is already producing. So
+ * this is treated as potentially audible and kept inside the ducked window
+ * alongside the routing, rather than run ahead of it.
  */
 function createAudioContextIfMissing(): void {
   if (!audioContext) {
@@ -698,23 +700,40 @@ function createAudioContextIfMissing(): void {
 }
 
 /**
- * Route both elements into the filter chain. This is the audible half:
- * `createMediaElementSource` on an element that is *playing* takes its output
- * off the platform's audio path and re-establishes it through the graph, which
- * is heard as a click or a brief drop. It bit exactly once per session — the
- * first time the Now Playing panel was opened mid-track — because the source
- * nodes are cached per element for their lifetime.
+ * Stand the graph up and route both elements into it, under cover of a fade.
  *
- * So when the active element is live, duck it to silence first, switch, then
- * ramp back. The discontinuity still happens; it just happens at zero
- * amplitude where there is nothing to hear.
+ * Two things here can be heard. `createMediaElementSource` on an element that
+ * is *playing* takes its output off the platform's audio path and
+ * re-establishes it through the graph. And creating the context itself opens a
+ * second output stream, which can prompt a device reconfigure. Both were
+ * landing mid-track the first time the Now Playing panel was opened, once per
+ * session, because context and source nodes persist for the page's lifetime.
+ *
+ * So when the active element is live: duck to silence, do all of it, ramp
+ * back. The discontinuities still occur, at zero amplitude. The fade-in runs
+ * even if the build failed, so a blocked AudioContext can't leave playback
+ * stuck at zero.
  */
+/**
+ * True while a ducked attach is mid-fade. Overlapping attaches used to leave
+ * playback permanently quiet: the second call samples `el.volume` mid-fade as
+ * its restore target, supersedes the first ramp, and the surviving fade-in
+ * climbs back only to that partial value.
+ */
+let attachInFlight = false;
+
 function attachElementSources(): void {
-  if (!audioContext) return;
-  if (sourceNodes.has(audioEl) && sourceNodes.has(nextAudioEl)) return;
+  if (attachInFlight) return;
+  if (audioContext && sourceNodes.has(audioEl) && sourceNodes.has(nextAudioEl)) return;
 
   const el = audioEl;
-  const connectBoth = () => {
+  const build = () => {
+    createAudioContextIfMissing();
+    if (!audioContext) return;
+    // The document has sticky activation by this point — playback required a
+    // gesture — so resume() is allowed even though the originating click has
+    // left the stack.
+    if (audioContext.state !== 'running') void audioContext.resume();
     // Both elements feed the same filter chain; the inactive one is paused and
     // therefore silent. An element can only ever have one MediaElementSource,
     // so each gets exactly one for its lifetime.
@@ -723,14 +742,25 @@ function attachElementSources(): void {
   };
 
   if (el.paused || el.volume === 0) {
-    connectBoth();
+    build();
     return;
   }
 
-  const target = el.volume;
-  rampVolume(el, target, 0, FADE_OUT_MS, () => {
-    connectBoth();
-    rampVolume(el, 0, target, FADE_IN_MS);
+  // Restore to the volume the store says we should be at, not to whatever the
+  // element happens to read right now — the latter is only correct if nothing
+  // else ever touches volume mid-fade.
+  const target = playerStore.isMuted ? 0 : playerStore.volume;
+  attachInFlight = true;
+  rampVolume(el, el.volume, 0, FADE_OUT_MS, () => {
+    // try/finally, not try/catch: a throw here is unexpected, but leaving the
+    // element stuck at zero would be a silent player — strictly worse than the
+    // click the fade exists to hide. The ramp back is not optional.
+    try {
+      build();
+    } finally {
+      attachInFlight = false;
+      rampVolume(el, 0, target, FADE_IN_MS);
+    }
   });
 }
 
@@ -788,13 +818,7 @@ function rampVolume(
  */
 export function retainVisualizer(): void {
   visualizerRefs++;
-  if (!audioGraphNeeded()) return;
-  // Context first and synchronously: it is inaudible, and resume() has to
-  // happen while the caller's user gesture is still on the stack.
-  createAudioContextIfMissing();
-  if (audioContext && audioContext.state !== 'running') void audioContext.resume();
-  // Routing is the audible part, and ducks itself if audio is live.
-  attachElementSources();
+  ensureAudioGraph();
 }
 
 export function releaseVisualizer(): void {
