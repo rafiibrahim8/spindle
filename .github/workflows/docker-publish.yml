@@ -33,8 +33,8 @@ jobs:
         id: version
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          # jq rather than node: the toolchain no longer includes Node, and this
-          # job should not need a runtime installed just to read two fields.
+          # jq rather than a JS runtime: this job should not need one installed
+          # just to read two fields.
           frontend_version=$(jq -r .version frontend/package.json)
           backend_version=$(jq -r .version backend/package.json)
           echo "tag: $tag_version | frontend: $frontend_version | backend: $backend_version"
@@ -48,11 +48,8 @@ jobs:
           fi
           echo "version=$tag_version" >> "$GITHUB_OUTPUT"
 
-  # One job per architecture, each on a runner of that architecture. This began
-  # as a workaround: arm64 was emulated through QEMU, which meant compiling
-  # better-sqlite3 and sharp under emulation — slow, and it eventually broke
-  # outright when a binfmt update started crashing Node with SIGILL. There are
-  # no native modules left to compile, so the split is now just about speed.
+  # One job per architecture, each on a runner of that architecture, so neither
+  # build runs under QEMU emulation.
   #
   # Each job pushes only its own manifest, addressed by digest and untagged;
   # the merge job below is what binds them to a tag.

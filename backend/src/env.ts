@@ -2,9 +2,9 @@
  * Configuration, resolved once at startup.
  *
  * Bun loads `.env` from the working directory only — it does not search upward
- * — so a repo-root `.env` never reaches this process when it runs with cwd
- * `backend/`. That matches what `dotenv.config()` did before, and it is why the
- * repo-root `.env` has never actually configured the backend.
+ * — so a repo-root `.env` does not reach this process when it runs with cwd
+ * `backend/`. Configure the backend through the environment, or a `.env` beside
+ * it.
  *
  * `DATA_ROOT` therefore anchors on the working directory rather than on this
  * file's location: the bundle lives in `dist/` while the source lives in `src/`,

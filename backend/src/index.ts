@@ -60,7 +60,7 @@ initDb();
 
 const server = Bun.serve({
   port: PORT,
-  // express.json({ limit: '1mb' }) — nothing here accepts an upload.
+  // Nothing here accepts an upload, so a small ceiling is plenty.
   maxRequestBodySize: 1024 * 1024,
   routes: wrapRoutes({
     '/api/tracks': { GET: listTracks },

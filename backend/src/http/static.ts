@@ -1,12 +1,13 @@
 /**
- * Static file serving, replacing `express.static` and `res.sendFile`.
+ * Static file serving.
  *
- * Bun 1.4 can serve a directory natively with `routes: { '/x/*': { dir } }`,
- * and it handles ETag, Last-Modified, 304 and Range on its own — but its option
- * shape is `{ dir, statCache }` with no way to attach headers, and the two
- * things served here both depend on `Cache-Control`: art filenames are content
- * hashes and want a year of immutable caching, while `index.html` must not be
- * cached at all. So the files are served by hand.
+ * Bun can serve a directory natively with `routes: { '/x/*': { dir } }`, which
+ * handles ETag, Last-Modified, 304 and Range on its own. It is not used here:
+ * its options are `{ dir, statCache }` with no way to attach headers, and both
+ * of the things served in this app turn on `Cache-Control` — art filenames are
+ * content hashes and want a month of immutable caching, while `index.html` must
+ * not be cached at all. Serving the files here buys that control back, at the
+ * cost of implementing the validators.
  */
 import path from 'node:path';
 

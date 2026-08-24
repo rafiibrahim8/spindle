@@ -29,7 +29,7 @@ Then open http://localhost:5174, click **Sync** in the sidebar, and point it at 
 | `bun run dev:frontend` | Frontend only (Vite) |
 | `bun run build` | Build both packages |
 | `bun run typecheck` | TypeScript across both packages |
-| `bun test` | Backend tests, including the API contract suite |
+| `bun test` | Backend tests |
 
 ## Layout
 

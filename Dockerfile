@@ -2,9 +2,8 @@
 
 # ──────────────────────────────────────────────────────────── builder
 # Bundles the backend to a single JS file and builds the frontend. Both run
-# under Bun, so there is no Node in this image and no native modules to
-# compile — the previous build needed python3/make/g++ for better-sqlite3 and
-# sharp, and a SHARP_IGNORE_GLOBAL_LIBVIPS workaround besides.
+# under Bun, so this stage needs no Node and no compiler toolchain: nothing in
+# the dependency tree is a native module.
 FROM oven/bun:1.4.0-alpine AS builder
 
 WORKDIR /app
@@ -21,9 +20,9 @@ COPY backend ./backend
 COPY frontend ./frontend
 
 # One bundled file. schema.sql and the migrations are imported as text, so they
-# are inlined here rather than copied alongside, and music-metadata — the only
-# runtime dependency left — is bundled in too. The runtime stage therefore
-# needs no node_modules at all.
+# are inlined rather than copied alongside, and music-metadata — the only
+# runtime dependency — is bundled in as well, so the runtime stage needs no
+# node_modules at all.
 RUN cd backend && bun run build
 
 # VITE_* env vars are read by Vite at build time and baked into the bundle.

@@ -5,12 +5,12 @@ import { notFound } from '../http/respond.ts';
 import { resolveWithin, serveFile } from '../http/static.ts';
 
 /**
- * Cached album art is written by the scanner at up to 500px and was previously
- * served at that one size everywhere — including the 40px thumbnails in the
- * virtualised track and queue lists. A 500px WebP decodes to ~1 MB of bitmap,
- * so scrolling a list on a phone meant a stream of decodes and a lot of
- * resident memory for images displayed at a twelfth of their size. That
- * main-thread work is exactly what starves audio playback.
+ * The scanner caches album art at up to 500px. Serving that one size
+ * everywhere would put a 500px WebP — roughly 1 MB of decoded bitmap — behind
+ * every 40px thumbnail in the virtualised track and queue lists, so scrolling
+ * on a phone would mean a stream of decodes and a lot of resident memory for
+ * images displayed at a twelfth of their size. That main-thread work is exactly
+ * what starves audio playback.
  *
  * `?w=` serves a downscaled variant instead, generated once and cached to disk
  * next to the original. Widths are whitelisted: the query string reaches an

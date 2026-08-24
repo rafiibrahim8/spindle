@@ -1,9 +1,10 @@
 /**
- * Request logging, replacing `morgan('dev')`.
+ * One line per request:
  *
- * Same fields and colour rules as morgan's dev format:
- *   :method :url :status :response-time ms - :res[content-length]
- * with only the status coloured, and `-` when there is no content length.
+ *   GET /api/tracks 200 1.284 ms - 4519
+ *
+ * Only the status is coloured — by class, so a sweep of the log shows failures
+ * without reading them — and the length is `-` when the response has none.
  */
 const RESET = '\x1b[0m';
 

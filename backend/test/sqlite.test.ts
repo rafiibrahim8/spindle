@@ -1,9 +1,10 @@
 /**
- * Pin the bun:sqlite behaviours the rewrite depends on.
+ * Guards on the bun:sqlite behaviours this codebase relies on.
  *
- * These are not tests of Bun so much as regression guards on assumptions: if a
+ * These are less tests of our own code than assertions about assumptions: if a
  * future Bun release changes any of them, the sync pipeline breaks in ways that
- * are invisible at the API surface (see BUN_REWRITE.md trap 4.1 in particular).
+ * are invisible at the API surface. The parameter-binding pair below is the one
+ * that matters most — it is why every Database is opened with `strict: true`.
  */
 import { expect, test, describe } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -17,8 +18,9 @@ function fresh(strict = true): Database {
 }
 
 describe('named parameter binding', () => {
-  // The whole codebase binds plain objects to @name placeholders. Under the
-  // default strict:false this silently matches nothing — no error, no row.
+  // The whole codebase binds plain objects to @name placeholders. Without
+  // strict mode that silently matches nothing — no error, no row — so this
+  // pins the reason strict mode is mandatory rather than preferred.
   test('non-strict mode silently fails to bind bare keys', () => {
     const db = new Database(':memory:');
     db.run('CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT)');
@@ -51,7 +53,7 @@ describe('named parameter binding', () => {
 });
 
 describe('result shapes', () => {
-  // better-sqlite3 returned undefined; every `| undefined` cast had to change.
+  // Row types across the codebase are declared `| null` because of this.
   test('.get() with no match returns null, not undefined', () => {
     const db = fresh();
     const row = db.query('SELECT id FROM artists WHERE name = ?').get('nobody');

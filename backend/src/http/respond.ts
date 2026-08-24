@@ -1,11 +1,9 @@
 /**
  * Response helpers.
  *
- * `Response.json()` would serve, but it emits `application/json;charset=utf-8`
- * where Express emitted `application/json; charset=utf-8`. The two are
- * equivalent under RFC 9110, and the contract comparison normalises them; the
- * header is still written out in full here so the wire format matches what the
- * frontend has always received.
+ * The content type is written out rather than left to `Response.json()`, which
+ * emits the parameter unspaced. Both spellings are equivalent under RFC 9110,
+ * so this is only about keeping one form on the wire.
  */
 export const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 

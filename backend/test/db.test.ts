@@ -63,9 +63,9 @@ describe('existing database', () => {
 });
 
 describe('migration runner', () => {
-  // Why the runner needs hasStatements(): better-sqlite3's exec() accepted a
-  // comment-only script as a no-op, and 001_initial.sql is exactly that.
-  test('bun:sqlite rejects a comment-only script, unlike better-sqlite3 exec()', () => {
+  // Why the runner needs hasStatements(): the baseline migration is
+  // documentation only, and a script with no statements cannot be run.
+  test('a comment-only script cannot be executed directly', () => {
     const db = new Database(':memory:', { strict: true });
     expect(() => db.run('-- just a comment\n')).toThrow(/no valid SQL statement/i);
   });

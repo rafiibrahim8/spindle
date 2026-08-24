@@ -135,11 +135,12 @@ function pickFrontCover(pics: IPicture[] | undefined): IPicture | null {
  * name is that sha256, which is also what makes the existing cache reusable —
  * see test/hash.test.ts.
  *
- * `fit: 'inside'` bounds both axes without distorting. sharp's `cover` used to
- * center-crop to an exact square, which Bun.Image cannot do — it has no crop
- * operation at all. The frontend renders art in fixed square boxes with
- * `object-fit: cover`, so the crop simply happens in the browser instead and
- * the result on screen is unchanged.
+ * `fit: 'inside'` bounds both axes without distorting, which leaves a
+ * non-square source stored non-square — 13 of the covers in a 536-track library
+ * measured that way. Cropping to an exact square is not an option: Bun.Image
+ * has no crop operation. It does not need one, because the frontend renders art
+ * in fixed square boxes with `object-fit: cover`, so the crop happens in the
+ * browser and only the stored geometry differs.
  */
 async function cacheAlbumArt(picture: IPicture): Promise<string> {
   const hash = new Bun.CryptoHasher('sha256').update(picture.data).digest('hex');

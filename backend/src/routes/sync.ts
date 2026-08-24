@@ -56,9 +56,9 @@ export function syncStatus(): Response {
  *
  * The job publishes through an EventEmitter, so the stream bridges the two:
  * buffered events are replayed for a client that connected late, then live
- * events are forwarded until a terminal one arrives. `req.signal` is what
- * replaces Express's `req.on('close')` — without unsubscribing there, a client
- * that navigates away mid-sync would leak a listener for the rest of the run.
+ * events are forwarded until a terminal one arrives. `req.signal` is how a
+ * disconnect is observed; without unsubscribing there, a client that navigates
+ * away mid-sync would leak a listener for the rest of the run.
  */
 export function syncProgress(req: Request & { params: { jobId: string } }, server: Bun.Server<undefined>): Response {
   const job = getJob(req.params.jobId);

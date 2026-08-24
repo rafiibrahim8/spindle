@@ -1,13 +1,13 @@
 /**
- * The middleware stack, as a decorator over the route table.
+ * Cross-cutting behaviour, as a decorator over the route table.
  *
- * Express composed behaviour with `app.use`; Bun's routes are plain values, so
- * the equivalent is to wrap every handler once, here. Applying it centrally is
- * what stops a new route from quietly shipping without CORS headers or logging.
+ * Routes are plain values, so anything that must apply to all of them is
+ * applied once, here. Doing it centrally is what stops a new route from quietly
+ * shipping without CORS headers or logging.
  *
- * Order matches the Express pipeline: the handler runs, its errors become the
- * JSON error shape, CORS headers go on whatever response results, and the
- * request is logged last with the final status.
+ * Order: the handler runs, any error it throws becomes the JSON error shape,
+ * CORS headers go on whatever response resulted, and the request is logged last
+ * so the line carries the final status.
  */
 import { applyCors, preflight } from './cors.ts';
 import { logRequest } from './log.ts';
@@ -16,7 +16,7 @@ import { fail } from './respond.ts';
 type Handler = (req: any, server: any) => Response | Promise<Response>;
 type RouteValue = Handler | Record<string, Handler>;
 
-/** Mirrors the old errorHandler: honour a thrown statusCode, else 500. */
+/** A thrown `statusCode` is honoured; anything else is a 500. */
 function errorResponse(err: unknown): Response {
   console.error((err as Error)?.stack || err);
   const status = (err as { statusCode?: number })?.statusCode ?? 500;
@@ -66,9 +66,9 @@ export function wrapRoutes<T extends Record<string, RouteValue>>(routes: T): T {
 /**
  * Parse a JSON body, tolerating an absent or unparseable one.
  *
- * `express.json()` left `req.body` undefined in both cases and every route then
- * used `req.body?.x`, so the endpoints' own validation produced the 400 — not
- * the parser.
+ * Both cases yield `undefined` rather than throwing, which leaves the 400 to
+ * each endpoint's own validation — `trackId is required` is a better answer
+ * than a parser error, and every route already checks its fields.
  */
 export async function readJson(req: Request): Promise<Record<string, unknown> | undefined> {
   try {

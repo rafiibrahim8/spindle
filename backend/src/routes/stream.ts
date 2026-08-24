@@ -5,12 +5,12 @@ import { fail } from '../http/respond.ts';
 /**
  * Audio streaming, with range handling done by hand.
  *
- * Bun applies automatic range handling to any file-backed response, but it
- * disagrees with the behaviour this endpoint has always had in four ways, each
- * confirmed by probe: it ignores `If-Range` (a stale validator still gets a
- * 206), ignores `If-None-Match` (200 instead of 304), answers a multi-range
- * request with 200 where this endpoint answers 206 with the first range, and
- * treats a malformed `bytes=-` as 200 where this endpoint answers 416.
+ * Bun applies automatic range handling to any file-backed response, but it is
+ * not sufficient here, in four measured ways: it ignores `If-Range`, so a client
+ * resuming a partial download whose file has changed gets fresh bytes spliced
+ * onto its stale copy; it ignores `If-None-Match`, answering 200 where a 304 is
+ * due; it answers a multi-range request with the whole body; and it treats a
+ * malformed `bytes=-` as a request for everything rather than a 416.
  *
  * Setting `Content-Range` ourselves suppresses that layer, so every 206 and 416
  * below takes effect as written.

@@ -49,10 +49,10 @@ function runMigrations(handle: Database): void {
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) continue;
     handle.transaction(() => {
-      // better-sqlite3's exec() accepted a comment-only script as a no-op;
-      // bun:sqlite's run() rejects it with "Query contained no valid SQL
-      // statement". 001_initial.sql is exactly that — a documentation-only
-      // baseline — so a version bump with nothing to execute is legitimate.
+      // A migration with nothing to execute is legitimate: 001_initial.sql is
+      // a documentation-only baseline whose whole job is to establish
+      // user_version = 1. run() rejects a script with no statements in it, so
+      // the version bump has to happen without the run.
       if (hasStatements(migration.sql)) handle.run(migration.sql);
       // PRAGMA does not accept bound parameters, and the value is an integer
       // literal from this module, never from input.
