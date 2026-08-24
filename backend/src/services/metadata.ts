@@ -74,11 +74,12 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   // fold. The digest then comes from the same bytes, saving another read.
   const inMemory = shouldBufferWholeFile(filePath, stat.size) ? await Bun.file(filePath).bytes() : null;
   const fileHash = inMemory ? hashPrefix(inMemory) : await partialHash(filePath);
-  // `path` lets the parser pick a container from the extension and fall back to
-  // sniffing content. A hard-coded mimeType would misread every format but the
-  // one it names.
+  // No filename or mime type is offered: the container is identified from the
+  // bytes, and naming one only overrides that. A hint is worse than none when
+  // the extension is wrong — a FLAC saved as .ogg parses correctly from content
+  // and not at all when told it is Ogg.
   const meta = inMemory
-    ? await parseBuffer(inMemory, { path: filePath, size: inMemory.length }, PARSE_OPTIONS)
+    ? await parseBuffer(inMemory, undefined, PARSE_OPTIONS)
     : await parseFile(filePath, PARSE_OPTIONS);
 
   const tags = meta.common;

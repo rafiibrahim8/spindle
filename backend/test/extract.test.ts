@@ -58,7 +58,7 @@ describe.skipIf(files.length === 0)('parsing from memory matches parsing from th
   test('tags, duration and cover bytes are identical either way', async () => {
     for (const file of files) {
       const bytes = await Bun.file(file).bytes();
-      const fromBuffer = await parseBuffer(bytes, { path: file, size: bytes.length }, PARSE_OPTIONS);
+      const fromBuffer = await parseBuffer(bytes, undefined, PARSE_OPTIONS);
       const fromFile = await parseFile(file, PARSE_OPTIONS);
 
       const where = path.basename(file);
@@ -72,13 +72,33 @@ describe.skipIf(files.length === 0)('parsing from memory matches parsing from th
     }
   }, 120_000);
 
-  // The container is inferred from the path; without it a caller would have to
-  // name a mimeType, and naming the wrong one silently yields nothing.
-  test('the path hint identifies the container', async () => {
+  // The container comes from the bytes, with no filename to go on.
+  test('the container is identified without any hint', async () => {
     for (const file of files.slice(0, 4)) {
       const bytes = await Bun.file(file).bytes();
-      const parsed = await parseBuffer(bytes, { path: file, size: bytes.length }, PARSE_OPTIONS);
+      const parsed = await parseBuffer(bytes, undefined, PARSE_OPTIONS);
       expect(parsed.format.container, path.basename(file)).toBeTruthy();
+    }
+  }, 60_000);
+
+  // Naming a container overrides what the bytes say, so a file with the wrong
+  // extension parses only when nothing is named. Passing the path would carry
+  // that misdetection over from the streaming path.
+  test('content wins over a misleading extension', async () => {
+    const mislabelled = `/tmp/spindle-mislabelled-${process.pid}.ogg`;
+    const source = files.find((f) => f.toLowerCase().endsWith('.ogg'));
+    if (!source) return;
+    try {
+      // A real Ogg under a .mp3 name: the bytes still identify it.
+      const renamed = `/tmp/spindle-mislabelled-${process.pid}.mp3`;
+      await Bun.write(renamed, Bun.file(source));
+      const bytes = await Bun.file(renamed).bytes();
+      const parsed = await parseBuffer(bytes, undefined, PARSE_OPTIONS);
+      expect(parsed.format.container).toBe('Ogg');
+      expect(parsed.format.duration).toBeGreaterThan(0);
+      await Bun.file(renamed).delete();
+    } finally {
+      await Bun.file(mislabelled).delete().catch(() => {});
     }
   }, 60_000);
 
