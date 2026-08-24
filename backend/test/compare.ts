@@ -88,6 +88,19 @@ function walk(prefix: string, expected: unknown, actual: unknown, out: Diff[], s
   }
 }
 
+/**
+ * Differences that are accepted rather than fixed, with the reason.
+ *
+ * `stream:if-range-stale` — when a client resumes a partial download whose
+ * validator has changed, the whole file must be sent despite the Range header.
+ * A file-backed body would be turned into a 206 by Bun's automatic range
+ * handling, and the only header that suppresses it, `Content-Range`, is
+ * forbidden on a 200 by RFC 9110 §14.4. Streaming the file bypasses that layer
+ * but forces chunked transfer encoding, so this one response has no
+ * `Content-Length`. The body is byte-identical either way.
+ */
+const ACCEPTED_DEVIATIONS = new Set(['stream:if-range-stale::header.content-length']);
+
 export function compare(baseline: any, candidate: any): Diff[] {
   const out: Diff[] = [];
   const byName = (c: any) => new Map<string, any>(c.records.map((r: any) => [r.name, r]));
@@ -107,6 +120,7 @@ export function compare(baseline: any, candidate: any): Diff[] {
       // Express writes `content-length: 0` on its 204/304s, Bun omits it.
       if (h === 'content-length' && (b.status === 204 || b.status === 304)
           && (bv ?? '0') === (cv ?? '0')) continue;
+      if (ACCEPTED_DEVIATIONS.has(`${name}::header.${h}`)) continue;
       if (!headersEqual(h, bv, cv)) {
         out.push({ step: name, field: `header.${h}`, expected: bv ?? '<absent>', actual: cv ?? '<absent>' });
       }

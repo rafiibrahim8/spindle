@@ -10,6 +10,8 @@ import { getArtist, getArtistAlbums, listArtists } from './routes/artists.ts';
 import { addPlaylistTrack, createPlaylist, getPlaylist, listPlaylists } from './routes/playlists.ts';
 import { getSettings, updateSettings } from './routes/settings.ts';
 import { mostPlayed, postPlay, postPlayComplete, recentlyAdded, recentlyPlayed } from './routes/stats.ts';
+import { serveArtFile } from './routes/art.ts';
+import { streamTrack } from './routes/stream.ts';
 import { getTrack, getTrackLyrics, listTracks, setTrackLiked } from './routes/tracks.ts';
 
 /** Art filenames are content hashes, so a given URL's bytes can never change. */
@@ -85,6 +87,11 @@ const server = Bun.serve({
 
     '/api/settings': { GET: getSettings, PUT: updateSettings },
 
+    '/api/stream/:id': { GET: streamTrack },
+
+    // `?w=` renditions are keyed on a single filename segment; the wildcard
+    // below still serves the nested variant directories on disk.
+    '/art/:file': { GET: serveArtFile },
     '/art/*': serveArt,
     // Unknown API paths must stay JSON: serving the SPA shell here would mask
     // typos and break clients that expect to parse the body.
