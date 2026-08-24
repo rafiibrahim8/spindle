@@ -1,84 +1,105 @@
-import Database, { type Database as DB, type Statement } from 'better-sqlite3';
+import { Database, type Statement } from 'bun:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { DB_PATH } from '../env.ts';
+import schemaSql from './schema.sql' with { type: 'text' };
+import { MIGRATIONS } from './migrations/index.ts';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../data');
-const DB_PATH = path.join(DATA_ROOT, 'db', 'music.db');
-const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
-const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+let db: Database | null = null;
 
-let db: DB | null = null;
-
-export function getDb(): DB {
+/**
+ * `strict: true` is not optional here. Under the default, binding a plain
+ * object to an `@name` placeholder silently matches nothing — no error, no row
+ * — and this codebase binds plain objects throughout the sync pipeline, so the
+ * loose mode would write NULLs and pass every API-level test. See
+ * test/sqlite.test.ts, which pins the behaviour.
+ */
+export function getDb(): Database {
   if (!db) {
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    db = new Database(DB_PATH, { create: true, strict: true });
+    db.run('PRAGMA journal_mode = WAL');
+    db.run('PRAGMA foreign_keys = ON');
   }
   return db;
 }
 
-// better-sqlite3 does not cache prepared statements, so hot loops that call
-// db.prepare() per row pay the parse/plan cost every time. Memoize by SQL
-// string, keyed per db instance so a reopened handle never reuses stale
-// statements.
-const stmtCache = new WeakMap<DB, Map<string, Statement>>();
-
-export function prepared(handle: DB, sql: string): Statement {
-  let perDb = stmtCache.get(handle);
-  if (!perDb) {
-    perDb = new Map();
-    stmtCache.set(handle, perDb);
-  }
-  let stmt = perDb.get(sql);
-  if (!stmt) {
-    stmt = handle.prepare(sql);
-    perDb.set(sql, stmt);
-  }
-  return stmt;
+export function closeDb(): void {
+  db?.close(false);
+  db = null;
 }
 
 export function initDb(): void {
   const handle = getDb();
-  handle.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'));
+  // schema.sql is idempotent (CREATE ... IF NOT EXISTS throughout) and run on
+  // every startup, so a fresh database needs no migration to become current.
+  handle.run(schemaSql);
   runMigrations(handle);
   seedSmartPlaylists(handle);
   console.log('✅ Database initialized');
 }
 
 /**
- * Minimal migration runner: numbered .sql files in db/migrations are applied
- * in order when their number exceeds PRAGMA user_version, each inside a
- * transaction. 001_initial.sql is the no-op baseline (schema.sql above is
- * idempotent and creates everything for fresh DBs).
+ * Apply any migration whose version exceeds PRAGMA user_version, in order, each
+ * inside a transaction. 001_initial.sql is the no-op baseline that establishes
+ * user_version = 1.
  */
-function runMigrations(handle: DB): void {
-  const current = Number(handle.pragma('user_version', { simple: true }));
-  const files = fs
-    .readdirSync(MIGRATIONS_DIR)
-    .filter((f) => /^\d+.*\.sql$/.test(f))
-    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-  for (const file of files) {
-    const version = parseInt(file, 10);
-    if (version <= current) continue;
-    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+function runMigrations(handle: Database): void {
+  const current = userVersion(handle);
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= current) continue;
     handle.transaction(() => {
-      handle.exec(sql);
-      handle.pragma(`user_version = ${version}`);
+      // better-sqlite3's exec() accepted a comment-only script as a no-op;
+      // bun:sqlite's run() rejects it with "Query contained no valid SQL
+      // statement". 001_initial.sql is exactly that — a documentation-only
+      // baseline — so a version bump with nothing to execute is legitimate.
+      if (hasStatements(migration.sql)) handle.run(migration.sql);
+      // PRAGMA does not accept bound parameters, and the value is an integer
+      // literal from this module, never from input.
+      handle.run(`PRAGMA user_version = ${migration.version}`);
     })();
-    console.log(`✅ Applied migration ${file}`);
+    console.log(`✅ Applied migration ${migration.name}`);
   }
 }
 
-function seedSmartPlaylists(handle: DB): void {
-  const insert = handle.prepare(`
+/**
+ * Whether a migration contains anything to execute once comments are removed.
+ *
+ * Deliberately biased towards "yes": a false positive merely lets run() raise
+ * on a genuinely empty script, while a false negative would silently skip a
+ * real migration and still bump user_version.
+ */
+function hasStatements(sql: string): boolean {
+  const stripped = sql
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // block comments
+    .replace(/--[^\n]*/g, '')            // line comments
+    .trim();
+  return stripped.length > 0;
+}
+
+function userVersion(handle: Database): number {
+  return (handle.query('PRAGMA user_version').get() as { user_version: number }).user_version;
+}
+
+function seedSmartPlaylists(handle: Database): void {
+  const insert = handle.query(`
     INSERT OR IGNORE INTO playlists(name, read_only, smart_key)
     VALUES (?, 1, ?)
   `);
   insert.run('Top 25 Most Played', 'most-played');
   insert.run('Recently Added',     'recently-added');
   insert.run('Never Played',       'never-played');
+}
+
+/**
+ * Bind a statement once and reuse it.
+ *
+ * `db.query()` already caches compiled statements, but only about twenty of
+ * them, and the sync pipeline uses a dozen distinct statements in its hot loop —
+ * close enough to the cap to be worth not relying on. Callers that run inside a
+ * loop should hold the statement in a module-level constant via this helper
+ * rather than calling `db.query()` per row.
+ */
+export function prepared(handle: Database, sql: string): Statement {
+  return handle.query(sql);
 }
