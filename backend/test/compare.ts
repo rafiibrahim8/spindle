@@ -17,11 +17,48 @@ export interface Diff {
 const BYTE_EXACT_EXEMPT = (step: string) => step.startsWith('art:');
 
 /**
- * Express stamps weak ETags on JSON responses via its own hashing; the rewrite
- * is not required to reproduce those byte-for-byte. Presence is not asserted
- * either, because dropping API-level ETags is an accepted difference.
+ * Header values that are equivalent under RFC 9110 but spelled differently by
+ * Express and Bun. Matching Express's exact spelling would mean hand-setting
+ * every content-type, so the comparison is normalised instead.
+ *
+ *   application/json; charset=utf-8   ==  application/json;charset=utf-8
+ *   text/html; charset=UTF-8          ==  text/html;charset=utf-8
+ *
+ * Media-type parameters are whitespace-insensitive and `charset` values are
+ * case-insensitive, so these differences are not observable by a client.
  */
-const IGNORED_HEADERS = new Set(['etag']);
+/** RFC 9239 registered text/javascript and obsoleted application/javascript. */
+const MEDIA_TYPE_ALIASES: Record<string, string> = {
+  'application/javascript': 'text/javascript'
+};
+
+function normalizeContentType(value: string): string {
+  const [rawType, ...params] = value.split(';');
+  const type = MEDIA_TYPE_ALIASES[rawType.trim().toLowerCase()] ?? rawType;
+  const normalizedParams = params
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean)
+    .sort();
+  return [type.trim().toLowerCase(), ...normalizedParams].join('; ');
+}
+
+/**
+ * Express stamps a weak ETag on responses it generates itself, derived from its
+ * own hashing. The rewrite is not required to reproduce those, so a weak
+ * baseline ETag is not compared. A *strong* one is: `/api/stream` derives
+ * `"<size>-<mtime>"` deliberately, and that is contract.
+ */
+function headerMatters(name: string, baselineValue: string | undefined): boolean {
+  if (name === 'etag') return !(baselineValue ?? '').startsWith('W/');
+  return true;
+}
+
+function headersEqual(name: string, a: string | undefined, b: string | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  if (name === 'content-type') return normalizeContentType(a) === normalizeContentType(b);
+  return false;
+}
 
 function walk(prefix: string, expected: unknown, actual: unknown, out: Diff[], step: string): void {
   if (Object.is(expected, actual)) return;
@@ -64,9 +101,15 @@ export function compare(baseline: any, candidate: any): Diff[] {
     if (b.status !== c.status) out.push({ step: name, field: 'status', expected: b.status, actual: c.status });
 
     for (const h of new Set([...Object.keys(b.headers ?? {}), ...Object.keys(c.headers ?? {})])) {
-      if (IGNORED_HEADERS.has(h)) continue;
       const bv = b.headers?.[h], cv = c.headers?.[h];
-      if (bv !== cv) out.push({ step: name, field: `header.${h}`, expected: bv ?? '<absent>', actual: cv ?? '<absent>' });
+      if (!headerMatters(h, bv)) continue;
+      // A bodiless response may or may not carry an explicit zero length:
+      // Express writes `content-length: 0` on its 204/304s, Bun omits it.
+      if (h === 'content-length' && (b.status === 204 || b.status === 304)
+          && (bv ?? '0') === (cv ?? '0')) continue;
+      if (!headersEqual(h, bv, cv)) {
+        out.push({ step: name, field: `header.${h}`, expected: bv ?? '<absent>', actual: cv ?? '<absent>' });
+      }
     }
 
     if ('json' in b || 'json' in c) walk('json', b.json, c.json, out, name);
