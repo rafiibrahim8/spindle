@@ -14,6 +14,7 @@
 import { expect, test, describe } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseFile } from 'music-metadata';
+import path from 'node:path';
 
 const DB_PATH = process.env.SPINDLE_TEST_DB ?? `${import.meta.dir}/../../_DATA/db/music.db`;
 const ART_DIR = process.env.SPINDLE_TEST_ART ?? `${import.meta.dir}/../../_DATA/art`;
@@ -36,17 +37,24 @@ describe.skipIf(!haveDb)('file_hash parity against the live database', () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  test('every present file re-hashes to its stored file_hash', async () => {
+  test('every unchanged file re-hashes to its stored file_hash', async () => {
     let checked = 0;
     const mismatches: string[] = [];
     const missing: string[] = [];
+    // A file edited or replaced since the last sync will hash differently, and
+    // that is the pipeline working, not the digest drifting. Size is the cheap
+    // discriminator: only files still the size the database recorded are held
+    // to their stored digest.
+    const edited: string[] = [];
     for (const r of rows) {
-      if (!(await Bun.file(r.file_path).exists())) { missing.push(r.file_path); continue; }
+      const file = Bun.file(r.file_path);
+      if (!(await file.exists())) { missing.push(r.file_path); continue; }
+      if (file.size !== r.file_size) { edited.push(path.basename(r.file_path)); continue; }
       const hex = await partialHash(r.file_path);
       if (hex !== r.file_hash) mismatches.push(`${r.file_path}: stored ${r.file_hash.slice(0, 12)} got ${hex.slice(0, 12)}`);
       checked++;
     }
-    console.log(`    file_hash: ${checked} verified, ${missing.length} absent from disk`);
+    console.log(`    file_hash: ${checked} verified, ${missing.length} absent, ${edited.length} changed since the last sync${edited.length ? ` (${edited.map((e) => e.slice(0, 34)).join(', ')})` : ''}`);
     expect(mismatches).toEqual([]);
     expect(checked).toBeGreaterThan(0);
   }, 120_000);

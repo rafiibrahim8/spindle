@@ -1,32 +1,86 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { parseFile, type IPicture } from 'music-metadata';
+import { parseBuffer, parseFile, type IPicture } from 'music-metadata';
 import { ART_CACHE_DIR } from '../env.ts';
 import type { TrackMeta } from '../types.ts';
 
 const PARTIAL_HASH_BYTES = 64 * 1024;
 
+/**
+ * Above this, tags are read straight from the file rather than from memory.
+ * Nothing in a music library is normally this large — the ceiling exists so a
+ * stray multi-gigabyte file cannot be pulled into memory wholesale.
+ */
+const MAX_IN_MEMORY_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Containers whose tags cost a full read anyway.
+ *
+ * An Ogg stream stores its length as the granule position of the last page, so
+ * a parser after the duration walks every page to the end of the file — 5318
+ * reads for a 7 MB track, most of them a 27-byte page header. Handing it the
+ * bytes instead is worth several times the parse.
+ *
+ * No other container here behaves that way: FLAC's STREAMINFO, WAV's header and
+ * MP3's Xing frame all carry the duration up front, and those parsers touch
+ * about 1% of the file. Reading a 37 MB FLAC in full to save a dozen reads is
+ * eight times slower, so they keep streaming.
+ */
+const READ_WHOLE_FILE = new Set(['.ogg', '.oga', '.opus']);
+
+/**
+ * Whether tags for this file are cheaper to read from memory than from disk.
+ * Exported so the choice can be asserted directly; the cost of getting it wrong
+ * is invisible in an all-Ogg library and severe in a FLAC one.
+ */
+export function shouldBufferWholeFile(filePath: string, size: number): boolean {
+  return READ_WHOLE_FILE.has(path.extname(filePath).toLowerCase()) && size <= MAX_IN_MEMORY_BYTES;
+}
+
+const PARSE_OPTIONS = { duration: true, skipCovers: false } as const;
+
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
+
+/** sha256 of the first 64 KiB of `bytes`, or of all of it when shorter. */
+function hashPrefix(bytes: Uint8Array): string {
+  return new Bun.CryptoHasher('sha256').update(bytes.subarray(0, PARTIAL_HASH_BYTES)).digest('hex');
+}
 
 /**
  * sha256 of a file's first 64 KiB.
  *
  * This value is persisted in tracks.file_hash and drives the sync pipeline's
- * skip-vs-reextract decision, so it must keep producing exactly what the
- * node:crypto implementation produced — otherwise the next sync re-reads tags
- * for the entire library. test/hash.test.ts checks all 536 rows against the
- * live database.
+ * skip-vs-reextract decision, so it must keep producing exactly the same digest
+ * — otherwise the next sync re-reads tags for the entire library.
+ * test/hash.test.ts checks every row against the live database.
+ *
+ * The sync pipeline calls this for every file it considers, including the ones
+ * it goes on to skip, so it reads 64 KiB and no more.
  */
 export async function partialHash(filePath: string): Promise<string> {
-  const bytes = await Bun.file(filePath).slice(0, PARTIAL_HASH_BYTES).bytes();
-  return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+  return hashPrefix(await Bun.file(filePath).slice(0, PARTIAL_HASH_BYTES).bytes());
 }
 
 export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const stat = await fsp.stat(filePath);
-  const fileHash = await partialHash(filePath);
-  const meta = await parseFile(filePath, { duration: true, skipCovers: false });
+
+  // Read the file once and parse from memory, where that is the cheaper shape.
+  //
+  // Handing music-metadata a path makes it tokenize straight from the file
+  // descriptor, one read() per token. For an Ogg — which is read to the last
+  // page regardless — that is thousands of tiny reads covering the whole file,
+  // and replacing them with a single sequential read cuts extraction several
+  // fold. The digest then comes from the same bytes, saving another read.
+  const inMemory = shouldBufferWholeFile(filePath, stat.size) ? await Bun.file(filePath).bytes() : null;
+  const fileHash = inMemory ? hashPrefix(inMemory) : await partialHash(filePath);
+  // No filename or mime type is offered: the container is identified from the
+  // bytes, and naming one only overrides that. A hint is worse than none when
+  // the extension is wrong — a FLAC saved as .ogg parses correctly from content
+  // and not at all when told it is Ogg.
+  const meta = inMemory
+    ? await parseBuffer(inMemory, undefined, PARSE_OPTIONS)
+    : await parseFile(filePath, PARSE_OPTIONS);
 
   const tags = meta.common;
   const fmt = meta.format;
