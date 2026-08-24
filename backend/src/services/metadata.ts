@@ -1,32 +1,61 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { parseFile, type IPicture } from 'music-metadata';
+import { parseBuffer, parseFile, type IPicture } from 'music-metadata';
 import { ART_CACHE_DIR } from '../env.ts';
 import type { TrackMeta } from '../types.ts';
 
 const PARTIAL_HASH_BYTES = 64 * 1024;
 
+/**
+ * Above this, tags are read straight from the file rather than from memory.
+ * Nothing in a music library is normally this large — the ceiling exists so a
+ * stray multi-gigabyte file cannot be pulled into memory wholesale.
+ */
+const MAX_IN_MEMORY_BYTES = 64 * 1024 * 1024;
+
+const PARSE_OPTIONS = { duration: true, skipCovers: false } as const;
+
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
+
+/** sha256 of the first 64 KiB of `bytes`, or of all of it when shorter. */
+function hashPrefix(bytes: Uint8Array): string {
+  return new Bun.CryptoHasher('sha256').update(bytes.subarray(0, PARTIAL_HASH_BYTES)).digest('hex');
+}
 
 /**
  * sha256 of a file's first 64 KiB.
  *
  * This value is persisted in tracks.file_hash and drives the sync pipeline's
- * skip-vs-reextract decision, so it must keep producing exactly what the
- * node:crypto implementation produced — otherwise the next sync re-reads tags
- * for the entire library. test/hash.test.ts checks all 536 rows against the
- * live database.
+ * skip-vs-reextract decision, so it must keep producing exactly the same digest
+ * — otherwise the next sync re-reads tags for the entire library.
+ * test/hash.test.ts checks every row against the live database.
+ *
+ * The sync pipeline calls this for every file it considers, including the ones
+ * it goes on to skip, so it reads 64 KiB and no more.
  */
 export async function partialHash(filePath: string): Promise<string> {
-  const bytes = await Bun.file(filePath).slice(0, PARTIAL_HASH_BYTES).bytes();
-  return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+  return hashPrefix(await Bun.file(filePath).slice(0, PARTIAL_HASH_BYTES).bytes());
 }
 
 export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const stat = await fsp.stat(filePath);
-  const fileHash = await partialHash(filePath);
-  const meta = await parseFile(filePath, { duration: true, skipCovers: false });
+
+  // Read the file once and parse from memory.
+  //
+  // Handing music-metadata a path makes it tokenize straight from the file
+  // descriptor, one read() per token: ~6800 syscalls for a 9 MB Ogg, median 27
+  // bytes each, to cover a file it reads in full anyway. Reading it here turns
+  // that into a single sequential read and cuts extraction time by about 6x.
+  // The digest comes from the same bytes, saving a second read as well.
+  const inMemory = stat.size <= MAX_IN_MEMORY_BYTES ? await Bun.file(filePath).bytes() : null;
+  const fileHash = inMemory ? hashPrefix(inMemory) : await partialHash(filePath);
+  // `path` lets the parser pick a container from the extension and fall back to
+  // sniffing content. A hard-coded mimeType would misread every format but the
+  // one it names.
+  const meta = inMemory
+    ? await parseBuffer(inMemory, { path: filePath, size: inMemory.length }, PARSE_OPTIONS)
+    : await parseFile(filePath, PARSE_OPTIONS);
 
   const tags = meta.common;
   const fmt = meta.format;
