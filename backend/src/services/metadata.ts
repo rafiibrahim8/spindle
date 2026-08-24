@@ -14,6 +14,30 @@ const PARTIAL_HASH_BYTES = 64 * 1024;
  */
 const MAX_IN_MEMORY_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Containers whose tags cost a full read anyway.
+ *
+ * An Ogg stream stores its length as the granule position of the last page, so
+ * a parser after the duration walks every page to the end of the file — 5318
+ * reads for a 7 MB track, most of them a 27-byte page header. Handing it the
+ * bytes instead is worth several times the parse.
+ *
+ * No other container here behaves that way: FLAC's STREAMINFO, WAV's header and
+ * MP3's Xing frame all carry the duration up front, and those parsers touch
+ * about 1% of the file. Reading a 37 MB FLAC in full to save a dozen reads is
+ * eight times slower, so they keep streaming.
+ */
+const READ_WHOLE_FILE = new Set(['.ogg', '.oga', '.opus']);
+
+/**
+ * Whether tags for this file are cheaper to read from memory than from disk.
+ * Exported so the choice can be asserted directly; the cost of getting it wrong
+ * is invisible in an all-Ogg library and severe in a FLAC one.
+ */
+export function shouldBufferWholeFile(filePath: string, size: number): boolean {
+  return READ_WHOLE_FILE.has(path.extname(filePath).toLowerCase()) && size <= MAX_IN_MEMORY_BYTES;
+}
+
 const PARSE_OPTIONS = { duration: true, skipCovers: false } as const;
 
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
@@ -41,14 +65,14 @@ export async function partialHash(filePath: string): Promise<string> {
 export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const stat = await fsp.stat(filePath);
 
-  // Read the file once and parse from memory.
+  // Read the file once and parse from memory, where that is the cheaper shape.
   //
   // Handing music-metadata a path makes it tokenize straight from the file
-  // descriptor, one read() per token: ~6800 syscalls for a 9 MB Ogg, median 27
-  // bytes each, to cover a file it reads in full anyway. Reading it here turns
-  // that into a single sequential read and cuts extraction time by about 6x.
-  // The digest comes from the same bytes, saving a second read as well.
-  const inMemory = stat.size <= MAX_IN_MEMORY_BYTES ? await Bun.file(filePath).bytes() : null;
+  // descriptor, one read() per token. For an Ogg — which is read to the last
+  // page regardless — that is thousands of tiny reads covering the whole file,
+  // and replacing them with a single sequential read cuts extraction several
+  // fold. The digest then comes from the same bytes, saving another read.
+  const inMemory = shouldBufferWholeFile(filePath, stat.size) ? await Bun.file(filePath).bytes() : null;
   const fileHash = inMemory ? hashPrefix(inMemory) : await partialHash(filePath);
   // `path` lets the parser pick a container from the extension and fall back to
   // sniffing content. A hard-coded mimeType would misread every format but the

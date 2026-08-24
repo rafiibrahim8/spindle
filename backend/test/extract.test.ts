@@ -27,6 +27,33 @@ const haveLibrary = fs.existsSync(MUSIC_ROOT) && fs.statSync(MUSIC_ROOT).isDirec
 const files = haveLibrary ? await sample(12) : [];
 const digest = (b?: Uint8Array) => (b ? new Bun.CryptoHasher('sha256').update(b).digest('hex') : null);
 
+describe('choosing where to read tags from', () => {
+  // Ogg stores its length in the last page, so a parser after the duration
+  // reads the whole file either way and buffering it is several times faster.
+  test('Ogg-family files are buffered', async () => {
+    const { shouldBufferWholeFile } = await import('../src/services/metadata.ts');
+    for (const ext of ['.ogg', '.oga', '.opus', '.OGG']) {
+      expect(shouldBufferWholeFile(`/music/track${ext}`, 9_000_000), ext).toBe(true);
+    }
+  });
+
+  // Everything else carries its duration in a header, so the parser touches
+  // about 1% of the file; reading it all would be slower, badly so for FLAC
+  // and WAV, which are large and answer in a dozen reads.
+  test('containers with a header-declared duration are not buffered', async () => {
+    const { shouldBufferWholeFile } = await import('../src/services/metadata.ts');
+    for (const ext of ['.flac', '.wav', '.mp3', '.m4a', '.aac', '.wma', '.alac', '.aiff']) {
+      expect(shouldBufferWholeFile(`/music/track${ext}`, 9_000_000), ext).toBe(false);
+    }
+  });
+
+  test('an oversized file stays on the streaming path', async () => {
+    const { shouldBufferWholeFile } = await import('../src/services/metadata.ts');
+    expect(shouldBufferWholeFile('/music/long.ogg', 9_000_000)).toBe(true);
+    expect(shouldBufferWholeFile('/music/long.ogg', 512 * 1024 * 1024)).toBe(false);
+  });
+});
+
 describe.skipIf(files.length === 0)('parsing from memory matches parsing from the file', () => {
   test('tags, duration and cover bytes are identical either way', async () => {
     for (const file of files) {
