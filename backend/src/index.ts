@@ -5,6 +5,12 @@ import { ART_CACHE_DIR, PORT, STATIC_DIR } from './env.ts';
 import { notFound } from './http/respond.ts';
 import { resolveWithin, serveFile } from './http/static.ts';
 import { wrapRoutes } from './http/wrap.ts';
+import { getAlbum, getAlbumTracks, listAlbums } from './routes/albums.ts';
+import { getArtist, getArtistAlbums, listArtists } from './routes/artists.ts';
+import { addPlaylistTrack, createPlaylist, getPlaylist, listPlaylists } from './routes/playlists.ts';
+import { getSettings, updateSettings } from './routes/settings.ts';
+import { mostPlayed, postPlay, postPlayComplete, recentlyAdded, recentlyPlayed } from './routes/stats.ts';
+import { getTrack, getTrackLyrics, listTracks, setTrackLiked } from './routes/tracks.ts';
 
 /** Art filenames are content hashes, so a given URL's bytes can never change. */
 const ART_CACHE_CONTROL = 'public, max-age=2592000, immutable';
@@ -54,6 +60,31 @@ const server = Bun.serve({
   // express.json({ limit: '1mb' }) — nothing here accepts an upload.
   maxRequestBodySize: 1024 * 1024,
   routes: wrapRoutes({
+    '/api/tracks': { GET: listTracks },
+    '/api/tracks/:id': { GET: getTrack },
+    '/api/tracks/:id/lyrics': { GET: getTrackLyrics },
+    '/api/tracks/:id/like': { PUT: setTrackLiked },
+
+    '/api/albums': { GET: listAlbums },
+    '/api/albums/:id': { GET: getAlbum },
+    '/api/albums/:id/tracks': { GET: getAlbumTracks },
+
+    '/api/artists': { GET: listArtists },
+    '/api/artists/:id': { GET: getArtist },
+    '/api/artists/:id/albums': { GET: getArtistAlbums },
+
+    '/api/playlists': { GET: listPlaylists, POST: createPlaylist },
+    '/api/playlists/:id': { GET: getPlaylist },
+    '/api/playlists/:id/tracks': { POST: addPlaylistTrack },
+
+    '/api/stats/most-played': { GET: mostPlayed },
+    '/api/stats/recently-played': { GET: recentlyPlayed },
+    '/api/stats/recently-added': { GET: recentlyAdded },
+    '/api/stats/play': { POST: postPlay },
+    '/api/stats/play/complete': { POST: postPlayComplete },
+
+    '/api/settings': { GET: getSettings, PUT: updateSettings },
+
     '/art/*': serveArt,
     // Unknown API paths must stay JSON: serving the SPA shell here would mask
     // typos and break clients that expect to parse the body.

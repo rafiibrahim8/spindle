@@ -43,8 +43,13 @@ const KEEP_HEADERS = [
   'access-control-allow-headers', 'access-control-allow-credentials'
 ];
 
-/** Art is re-encoded by a different library, so its validators cannot match. */
-const MASK_VALIDATORS = (name: string) => name.startsWith('art:');
+/**
+ * Art *images* are re-encoded by a different library, so their validators
+ * cannot match. Error responses under /art are ordinary JSON and are compared
+ * normally — masking those would hide a missing header behind a placeholder.
+ */
+const MASK_VALIDATORS = (name: string, contentType: string) =>
+  name.startsWith('art:') && contentType.startsWith('image/');
 
 function normalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -69,11 +74,13 @@ function normalizeJson(value: unknown): unknown {
 }
 
 function pickHeaders(res: Response, step: Step): Record<string, string> {
+  const contentType = res.headers.get('content-type') ?? '';
+  const mask = MASK_VALIDATORS(step.name, contentType);
   const out: Record<string, string> = {};
   for (const h of KEEP_HEADERS) {
     const v = res.headers.get(h);
     if (v === null) continue;
-    out[h] = (MASK_VALIDATORS(step.name) && (h === 'etag' || h === 'last-modified')) ? '<PRESENT>' : v;
+    out[h] = (mask && (h === 'etag' || h === 'last-modified')) ? '<PRESENT>' : v;
   }
   return out;
 }

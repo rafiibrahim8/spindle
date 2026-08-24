@@ -1,9 +1,9 @@
-import express from 'express';
-import { getDb } from '../db/init.js';
-import { getLyrics } from '../services/lyrics.js';
+import { getDb } from '../db/init.ts';
+import { fail, json } from '../http/respond.ts';
+import { readJson } from '../http/wrap.ts';
+import { getLyrics } from '../services/lyrics.ts';
 
-const router = express.Router();
-
+/** Whitelist: the sort key reaches the SQL directly, so it can never be caller-supplied. */
 const SORTS: Record<string, string> = {
   title: 't.title',
   artist: 't.artist',
@@ -14,18 +14,19 @@ const SORTS: Record<string, string> = {
   liked_at: 't.liked_at'
 };
 
-router.get('/', (req, res) => {
-  const search = String(req.query.search || '').trim();
-  const artist = String(req.query.artist || '').trim();
-  const artistId = req.query.artist_id ? Number(req.query.artist_id) : null;
-  const album = String(req.query.album || '').trim();
-  const albumId = req.query.album_id ? Number(req.query.album_id) : null;
-  const genre = String(req.query.genre || '').trim();
-  const liked = req.query.liked === '1' || req.query.liked === 'true';
-  const sortKey = SORTS[String(req.query.sort || 'title')] || SORTS.title;
-  const order = String(req.query.order || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
-  const limit = clamp(parseInt(String(req.query.limit || '500'), 10), 1, 5000);
-  const offset = Math.max(0, parseInt(String(req.query.offset || '0'), 10));
+export function listTracks(req: Request): Response {
+  const q = new URL(req.url).searchParams;
+  const search = (q.get('search') ?? '').trim();
+  const artist = (q.get('artist') ?? '').trim();
+  const artistId = q.get('artist_id') ? Number(q.get('artist_id')) : null;
+  const album = (q.get('album') ?? '').trim();
+  const albumId = q.get('album_id') ? Number(q.get('album_id')) : null;
+  const genre = (q.get('genre') ?? '').trim();
+  const liked = q.get('liked') === '1' || q.get('liked') === 'true';
+  const sortKey = SORTS[q.get('sort') ?? 'title'] || SORTS.title;
+  const order = (q.get('order') ?? 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  const limit = clamp(parseInt(q.get('limit') ?? '500', 10), 1, 5000);
+  const offset = Math.max(0, parseInt(q.get('offset') ?? '0', 10) || 0);
 
   const where: string[] = [];
   const params: Record<string, unknown> = {};
@@ -59,13 +60,12 @@ router.get('/', (req, res) => {
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const db = getDb();
 
-  const totalRow = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM tracks t ${whereSql}`)
+  const totalRow = db.query(`SELECT COUNT(*) AS n FROM tracks t ${whereSql}`)
     .get(params) as { n: number };
 
-  const rows = getDb()
-    .prepare(`
+  const rows = db.query(`
       SELECT t.*, a.art_path, COALESCE(s.play_count, 0) AS play_count, s.last_played
       FROM tracks t
       LEFT JOIN albums a     ON a.id = t.album_id
@@ -73,57 +73,47 @@ router.get('/', (req, res) => {
       ${whereSql}
       ORDER BY ${sortKey} ${order}
       LIMIT @limit OFFSET @offset
-    `)
-    .all({ ...params, limit, offset });
+    `).all({ ...params, limit, offset });
 
-  res.json({ tracks: rows, total: totalRow.n });
-});
+  return json({ tracks: rows, total: totalRow.n });
+}
 
-router.get('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const row = getDb()
-    .prepare<[number]>(`
+export function getTrack(req: { params: { id: string } }): Response {
+  const row = getDb().query(`
       SELECT t.*, a.art_path, COALESCE(s.play_count, 0) AS play_count, s.last_played
       FROM tracks t
       LEFT JOIN albums a     ON a.id = t.album_id
       LEFT JOIN play_stats s ON s.track_id = t.id
       WHERE t.id = ?
-    `)
-    .get(id);
-  if (!row) {
-    res.status(404).json({ error: 'Track not found' });
-    return;
-  }
-  res.json(row);
-});
+    `).get(Number(req.params.id));
+  if (!row) return fail('Track not found', 404);
+  return json(row);
+}
 
-router.get('/:id/lyrics', (req, res) => {
+export function getTrackLyrics(req: { params: { id: string } }): Response {
   const id = Number(req.params.id);
   const lyrics = getLyrics(getDb(), id);
-  res.json({
+  return json({
     trackId: id,
     syncedLrc: lyrics?.syncedLrc ?? null,
     unsyncedText: lyrics?.unsyncedText ?? null
   });
-});
+}
 
-router.put('/:id/like', (req, res) => {
+export async function setTrackLiked(req: Request & { params: { id: string } }): Promise<Response> {
   const id = Number(req.params.id);
-  const liked = Boolean(req.body?.liked);
+  const body = await readJson(req);
+  const liked = Boolean(body?.liked);
   const db = getDb();
-  const exists = db.prepare<[number]>('SELECT id FROM tracks WHERE id = ?').get(id) as { id: number } | undefined;
-  if (!exists) {
-    res.status(404).json({ error: 'Track not found' });
-    return;
-  }
-  db.prepare('UPDATE tracks SET liked = ?, liked_at = ? WHERE id = ?')
+  const exists = db.query('SELECT id FROM tracks WHERE id = ?').get(id) as { id: number } | null;
+  if (!exists) return fail('Track not found', 404);
+
+  db.query('UPDATE tracks SET liked = ?, liked_at = ? WHERE id = ?')
     .run(liked ? 1 : 0, liked ? Date.now() : null, id);
-  res.json({ id, liked });
-});
+  return json({ id, liked });
+}
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
 }
-
-export default router;
