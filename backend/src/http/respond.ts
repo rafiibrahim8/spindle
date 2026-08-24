@@ -9,7 +9,7 @@
  */
 export const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 
-export function json(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
+export function json(data: unknown, status = 200, extraHeaders?: Bun.HeadersInit): Response {
   const headers = new Headers(extraHeaders);
   headers.set('Content-Type', JSON_CONTENT_TYPE);
   return new Response(JSON.stringify(data), { status, headers });

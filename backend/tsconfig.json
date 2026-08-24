@@ -1,18 +1,22 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "jsx": "preserve",
-    "types": ["node"],
-    "declaration": false,
-    "sourceMap": true,
-    "noEmit": false
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    // music-metadata's exports map points the "node" condition at index.d.ts
+    // (which declares parseFile) and "default" at the browser build core.d.ts
+    // (which does not). Bun resolves the node condition at runtime, so tsc has
+    // to be told to resolve it too or the types describe a different module.
+    "customConditions": ["node"],
+    "types": ["bun"],
+    // Imports carry their .ts extension, which is what Bun resolves at runtime
+    // and what the bundler follows; tsc only ever type-checks here.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist", "data"]
 }

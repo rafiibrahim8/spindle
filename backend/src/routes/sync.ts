@@ -60,7 +60,7 @@ export function syncStatus(): Response {
  * replaces Express's `req.on('close')` — without unsubscribing there, a client
  * that navigates away mid-sync would leak a listener for the rest of the run.
  */
-export function syncProgress(req: Request & { params: { jobId: string } }, server: Bun.Server): Response {
+export function syncProgress(req: Request & { params: { jobId: string } }, server: Bun.Server<undefined>): Response {
   const job = getJob(req.params.jobId);
   if (!job) return fail('Unknown sync job', 404);
 

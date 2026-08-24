@@ -44,8 +44,8 @@ function decorate(handler: Handler): Handler {
   };
 }
 
-export function wrapRoutes(routes: Record<string, RouteValue>): Record<string, unknown> {
-  const wrapped: Record<string, unknown> = {};
+export function wrapRoutes<T extends Record<string, RouteValue>>(routes: T): T {
+  const wrapped: Record<string, RouteValue> = {};
   for (const [pattern, value] of Object.entries(routes)) {
     if (typeof value === 'function') {
       wrapped[pattern] = decorate(value);
@@ -58,7 +58,9 @@ export function wrapRoutes(routes: Record<string, RouteValue>): Record<string, u
     methods.OPTIONS ??= decorate(() => new Response(null, { status: 204 }));
     wrapped[pattern] = methods;
   }
-  return wrapped;
+  // The decorator preserves each entry's shape, which the signature asserts so
+  // that callers keep Bun's per-path request typing.
+  return wrapped as T;
 }
 
 /**

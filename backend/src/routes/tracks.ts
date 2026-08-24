@@ -29,7 +29,7 @@ export function listTracks(req: Request): Response {
   const offset = Math.max(0, parseInt(q.get('offset') ?? '0', 10) || 0);
 
   const where: string[] = [];
-  const params: Record<string, unknown> = {};
+  const params: Record<string, string | number> = {};
 
   if (search) {
     where.push('(t.title LIKE @q OR t.artist LIKE @q OR t.album LIKE @q)');
