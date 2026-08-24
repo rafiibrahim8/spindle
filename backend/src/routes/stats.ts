@@ -1,13 +1,11 @@
-import express from 'express';
-import { getDb } from '../db/init.js';
-import { markPlayCompleted, recordPlay } from '../services/stats.js';
+import { getDb } from '../db/init.ts';
+import { fail, json } from '../http/respond.ts';
+import { readJson } from '../http/wrap.ts';
+import { markPlayCompleted, recordPlay } from '../services/stats.ts';
 
-const router = express.Router();
-
-router.get('/most-played', (req, res) => {
-  const limit = clampLimit(req.query.limit, 25);
-  const rows = getDb()
-    .prepare<[number]>(`
+export function mostPlayed(req: Request): Response {
+  const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 25);
+  const rows = getDb().query(`
       SELECT t.*, a.art_path, s.play_count, s.last_played
       FROM play_stats s
       JOIN tracks t       ON t.id = s.track_id
@@ -15,15 +13,13 @@ router.get('/most-played', (req, res) => {
       WHERE s.play_count > 0
       ORDER BY s.play_count DESC, s.last_played DESC
       LIMIT ?
-    `)
-    .all(limit);
-  res.json({ tracks: rows });
-});
+    `).all(limit);
+  return json({ tracks: rows });
+}
 
-router.get('/recently-played', (req, res) => {
-  const limit = clampLimit(req.query.limit, 25);
-  const rows = getDb()
-    .prepare<[number]>(`
+export function recentlyPlayed(req: Request): Response {
+  const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 25);
+  const rows = getDb().query(`
       SELECT t.*, a.art_path, s.play_count, s.last_played
       FROM play_stats s
       JOIN tracks t       ON t.id = s.track_id
@@ -31,57 +27,46 @@ router.get('/recently-played', (req, res) => {
       WHERE s.last_played IS NOT NULL
       ORDER BY s.last_played DESC
       LIMIT ?
-    `)
-    .all(limit);
-  res.json({ tracks: rows });
-});
+    `).all(limit);
+  return json({ tracks: rows });
+}
 
-router.get('/recently-added', (req, res) => {
-  const limit = clampLimit(req.query.limit, 25);
-  const rows = getDb()
-    .prepare<[number]>(`
+export function recentlyAdded(req: Request): Response {
+  const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 25);
+  const rows = getDb().query(`
       SELECT t.*, a.art_path, COALESCE(s.play_count, 0) AS play_count, s.last_played
       FROM tracks t
       LEFT JOIN albums a     ON a.id = t.album_id
       LEFT JOIN play_stats s ON s.track_id = t.id
       ORDER BY t.date_added DESC
       LIMIT ?
-    `)
-    .all(limit);
-  res.json({ tracks: rows });
-});
+    `).all(limit);
+  return json({ tracks: rows });
+}
 
-router.post('/play', (req, res) => {
-  const trackId = Number(req.body?.trackId);
-  if (!trackId) {
-    res.status(400).json({ error: 'trackId is required' });
-    return;
-  }
-  const exists = getDb()
-    .prepare<[number]>('SELECT 1 FROM tracks WHERE id = ?')
-    .get(trackId);
-  if (!exists) {
-    res.status(404).json({ error: 'Track not found' });
-    return;
-  }
+export async function postPlay(req: Request): Promise<Response> {
+  const body = await readJson(req);
+  const trackId = Number(body?.trackId);
+  if (!trackId) return fail('trackId is required', 400);
+
+  const exists = getDb().query('SELECT 1 FROM tracks WHERE id = ?').get(trackId);
+  if (!exists) return fail('Track not found', 404);
+
   recordPlay(trackId);
-  res.json({ ok: true });
-});
+  return json({ ok: true });
+}
 
-router.post('/play/complete', (req, res) => {
-  const trackId = Number(req.body?.trackId);
-  if (!trackId) {
-    res.status(400).json({ error: 'trackId is required' });
-    return;
-  }
+export async function postPlayComplete(req: Request): Promise<Response> {
+  const body = await readJson(req);
+  const trackId = Number(body?.trackId);
+  if (!trackId) return fail('trackId is required', 400);
+
   markPlayCompleted(trackId);
-  res.json({ ok: true });
-});
+  return json({ ok: true });
+}
 
 function clampLimit(value: unknown, fallback: number): number {
   const n = parseInt(String(value || fallback), 10);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(n, 100);
 }
-
-export default router;

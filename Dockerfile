@@ -1,68 +1,46 @@
 # syntax=docker/dockerfile:1.7
 
 # ──────────────────────────────────────────────────────────── builder
-# Compiles native modules (better-sqlite3, sharp), builds backend (tsc) and
-# frontend (Vite), then produces a self-contained backend deploy directory
-# with only its production dependencies via `pnpm deploy --prod`.
-FROM node:22-alpine AS builder
-
-# sharp ships its own libvips inside @img/sharp-linuxmusl-*, so there is no
-# vips-dev here and no pkgconfig to find one. Left to its own devices sharp
-# would notice Alpine's system libvips (8.18.2 on this base), try to build
-# against it via node-gyp, fail for want of node-addon-api, and fall back to
-# the bundled 8.15.3 anyway — wasted build work and a needless dependency on
-# whatever version Alpine happens to ship. Skipping the detection makes the
-# outcome the one it reaches regardless, deterministically.
-ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
-
-# Kept for better-sqlite3: it has a musl prebuild for every Node ABI this
-# image targets, but the toolchain is the difference between a slow build and
-# a failed one if that ever stops being true.
-RUN apk add --no-cache python3 make g++
-
-RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
+# Bundles the backend to a single JS file and builds the frontend. Both run
+# under Bun, so this stage needs no Node and no compiler toolchain: nothing in
+# the dependency tree is a native module.
+FROM oven/bun:1.4.0-alpine AS builder
 
 WORKDIR /app
 
-# Manifests first so dep install caches across source changes.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
-COPY backend/package.json backend/tsconfig.json ./backend/
-COPY frontend/package.json frontend/tsconfig.json ./frontend/
+# Manifests first so dependency install caches across source changes.
+COPY package.json bun.lock tsconfig.json ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile
 
-# Sources
 COPY backend ./backend
 COPY frontend ./frontend
 
-RUN pnpm --filter backend run build
+# One bundled file. schema.sql and the migrations are imported as text, so they
+# are inlined rather than copied alongside, and music-metadata — the only
+# runtime dependency — is bundled in as well, so the runtime stage needs no
+# node_modules at all.
+RUN cd backend && bun run build
 
 # VITE_* env vars are read by Vite at build time and baked into the bundle.
 # - VITE_DEFAULT_MUSIC_ROOT: in-container mount point used by the sync flow.
-# - VITE_IS_INSIDE_DOCKER:  marker so the frontend can short-circuit the
-#   sync prompt entirely; the host-side bind mount is what changes between
+# - VITE_IS_INSIDE_DOCKER:  marker so the frontend can short-circuit the sync
+#   prompt entirely; the host-side bind mount is what changes between
 #   machines, not /music itself.
 ENV VITE_DEFAULT_MUSIC_ROOT=/music \
     VITE_IS_INSIDE_DOCKER=1
-RUN pnpm --filter frontend run build
-
-# Self-contained backend bundle (only prod deps with native bindings).
-RUN pnpm --filter backend deploy --prod /out/backend
+RUN cd frontend && bunx --bun vite build
 
 # ──────────────────────────────────────────────────────────── runtime
-FROM node:22-alpine
-
-# No vips package: sharp carries its own libvips in node_modules, so the
-# system one would only be dead weight.
-RUN apk add --no-cache tini
+FROM oven/bun:1.4.0-alpine
 
 WORKDIR /app
 
-COPY --from=builder /out/backend/package.json    ./backend/
-COPY --from=builder /out/backend/node_modules    ./backend/node_modules
-COPY --from=builder /app/backend/dist            ./backend/dist
-COPY --from=builder /app/frontend/dist           ./frontend/dist
+COPY --from=builder /app/backend/dist   ./backend/dist
+COPY --from=builder /app/frontend/dist  ./frontend/dist
 
 ENV NODE_ENV=production \
     PORT=1990 \
@@ -72,6 +50,7 @@ ENV NODE_ENV=production \
 EXPOSE 1990
 VOLUME ["/data", "/music"]
 
-# tini reaps zombies and forwards signals so docker stop is graceful.
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "/app/backend/dist/index.js"]
+# No init process: the server installs SIGTERM/SIGINT handlers and stops
+# itself, and it spawns no children to reap. `--no-env-file` keeps a stray
+# .env in the image or a bind mount from overriding the configuration above.
+CMD ["bun", "--no-env-file", "backend/dist/index.js"]

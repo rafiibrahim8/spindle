@@ -9,7 +9,7 @@
 .env.local
 *.log
 npm-debug.log*
-pnpm-debug.log*
+bun-debug.log*
 
 # OS / editors / agent state
 .git

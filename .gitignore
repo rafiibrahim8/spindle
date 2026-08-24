@@ -28,4 +28,5 @@ Thumbs.db
 
 # Agent / tooling local state
 .claude/
+.playwright-mcp/
 _DATA/

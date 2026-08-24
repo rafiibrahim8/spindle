@@ -1,6 +1,6 @@
 # Spindle — Self-Hosted Music Player
 
-A self-hosted, full-stack music player. Express + better-sqlite3 backend, SolidJS frontend, pnpm workspace monorepo.
+A self-hosted, full-stack music player. Bun backend, SolidJS frontend, Bun workspace monorepo.
 
 The brand mark is the spindle of a turntable — concentric grooves around a centered pin.
 
@@ -8,14 +8,14 @@ The brand mark is the spindle of a turntable — concentric grooves around a cen
 
 ```bash
 # 1. Install deps
-pnpm install
+bun install
 
 # 2. Configure (optional)
 cp .env.example .env
 # Edit .env and set DEFAULT_MUSIC_ROOT to your music directory if you'd like.
 
 # 3. Run dev (backend on :3001, frontend on :5174 with proxy)
-pnpm dev
+bun run dev
 ```
 
 Then open http://localhost:5174, click **Sync** in the sidebar, and point it at your music root.
@@ -24,25 +24,29 @@ Then open http://localhost:5174, click **Sync** in the sidebar, and point it at 
 
 | Command | What it does |
 |---|---|
-| `pnpm dev` | Start backend + frontend in parallel |
-| `pnpm dev:backend` | Backend only (`tsx watch`) |
-| `pnpm dev:frontend` | Frontend only (Vite) |
-| `pnpm build` | Build both packages |
-| `pnpm typecheck` | TypeScript across both packages |
+| `bun run dev` | Start backend + frontend in parallel |
+| `bun run dev:backend` | Backend only (`bun --watch`) |
+| `bun run dev:frontend` | Frontend only (Vite) |
+| `bun run build` | Build both packages |
+| `bun run typecheck` | TypeScript across both packages |
+| `bun test` | Backend tests |
 
 ## Layout
 
 ```
-backend/   Express API + better-sqlite3 + scanner/sync engine
+backend/   Bun.serve API + bun:sqlite + scanner/sync engine
 frontend/  SolidJS SPA — Solid Router, Solid Query, Solid Virtual
 ```
 
 ## Requirements
 
-- Node.js 20+
-- pnpm 9+
+- Bun 1.4+
 
-`better-sqlite3` and `sharp` are native packages — your platform must support node-gyp builds, or pnpm needs to fetch a prebuilt binary for them.
+No native modules and no compiler toolchain: SQLite, image processing, globbing,
+HTTP serving and `.env` loading are all Bun built-ins. The only runtime
+dependency is `music-metadata`, which is pure JavaScript and gets bundled into
+the build output — the production image ships a single JS file and no
+`node_modules`.
 
 ## Persistence model
 

@@ -1,77 +1,124 @@
-import cors from 'cors';
-import dotenv from 'dotenv';
-import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { initDb } from './db/init.js';
-import { errorHandler } from './middleware/errorHandler.js';
-import { logger } from './middleware/logger.js';
-import albumsRouter from './routes/albums.js';
-import { createArtRouter } from './routes/art.js';
-import artistsRouter from './routes/artists.js';
-import playlistsRouter from './routes/playlists.js';
-import settingsRouter from './routes/settings.js';
-import statsRouter from './routes/stats.js';
-import streamRouter from './routes/stream.js';
-import syncRouter from './routes/sync.js';
-import tracksRouter from './routes/tracks.js';
+import { initDb } from './db/init.ts';
+import { ART_CACHE_DIR, PORT, STATIC_DIR } from './env.ts';
+import { notFound } from './http/respond.ts';
+import { resolveWithin, serveFile } from './http/static.ts';
+import { wrapRoutes } from './http/wrap.ts';
+import { getAlbum, getAlbumTracks, listAlbums } from './routes/albums.ts';
+import { getArtist, getArtistAlbums, listArtists } from './routes/artists.ts';
+import { addPlaylistTrack, createPlaylist, getPlaylist, listPlaylists } from './routes/playlists.ts';
+import { getSettings, updateSettings } from './routes/settings.ts';
+import { mostPlayed, postPlay, postPlayComplete, recentlyAdded, recentlyPlayed } from './routes/stats.ts';
+import { serveArtFile } from './routes/art.ts';
+import { streamTrack } from './routes/stream.ts';
+import { startSync, syncProgress, syncStatus } from './routes/sync.ts';
+import { getTrack, getTrackLyrics, listTracks, setTrackLiked } from './routes/tracks.ts';
 
-dotenv.config();
+/** Art filenames are content hashes, so a given URL's bytes can never change. */
+const ART_CACHE_CONTROL = 'public, max-age=2592000, immutable';
+/** Vite's asset names are content-hashed too, though less aggressively cached. */
+const ASSET_CACHE_CONTROL = 'public, max-age=604800';
+/** The shell is the one file whose contents change under a stable URL. */
+const SHELL_CACHE_CONTROL = 'public, max-age=0';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../data');
-const ART_CACHE_DIR = path.join(DATA_ROOT, 'art');
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
 
-const app = express();
-const PORT = Number(process.env.PORT) || 3001;
-
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5174' }));
-app.use(express.json({ limit: '1mb' }));
-app.use(logger);
-
-// Downscaled `?w=` renditions first; everything else falls through to the
-// full-size original. Art filenames are content hashes, so both are immutable.
-app.use('/art', createArtRouter(ART_CACHE_DIR));
-app.use('/art', express.static(ART_CACHE_DIR, { maxAge: '30d', immutable: true }));
-
-app.use('/api/tracks', tracksRouter);
-app.use('/api/albums', albumsRouter);
-app.use('/api/artists', artistsRouter);
-app.use('/api/playlists', playlistsRouter);
-app.use('/api/sync', syncRouter);
-app.use('/api/stream', streamRouter);
-app.use('/api/stats', statsRouter);
-app.use('/api/settings', settingsRouter);
-
-// Production: serve the built SPA from the same Express process. Set
-// SPINDLE_FRONTEND_STATIC_DIR=/path/to/frontend/dist in production. In dev,
-// leave it unset — Vite serves the SPA on a separate port and proxies /api.
-const STATIC_DIR = process.env.SPINDLE_FRONTEND_STATIC_DIR;
-if (STATIC_DIR && fs.existsSync(STATIC_DIR)) {
-  app.use(express.static(STATIC_DIR, {
-    maxAge: '7d',         // hashed Vite assets are safe to cache long
-    etag: true,
-    index: false          // we send index.html ourselves via the SPA fallback
-  }));
-  // SPA fallback — any non-asset, non-API path returns index.html so the
-  // SolidJS Router can handle it. Must come AFTER /api/* and /art. Unknown
-  // API/art paths get a JSON 404 — serving index.html there would mask
-  // typos and break clients expecting JSON.
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/') || req.path.startsWith('/art/')) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    res.sendFile(path.join(STATIC_DIR, 'index.html'));
-  });
+/**
+ * Cached cover art. Downscaled `?w=` renditions are handled ahead of this in
+ * routes/art.ts; anything reaching here is served at full size.
+ */
+async function serveArt(req: Request): Promise<Response> {
+  const rel = new URL(req.url).pathname.slice('/art'.length);
+  const target = resolveWithin(ART_CACHE_DIR, rel);
+  if (!target) return notFound();
+  return (await serveFile(target, req, { cacheControl: ART_CACHE_CONTROL })) ?? notFound();
 }
 
-app.use(errorHandler);
+/**
+ * The built SPA, when one is configured.
+ *
+ * A path that matches no asset returns `index.html` rather than a 404, so the
+ * client-side router can handle deep links — and, as a side effect that the
+ * captured baseline confirms, a request for a missing hashed asset also returns
+ * the shell rather than a 404.
+ */
+async function serveSpa(req: Request): Promise<Response> {
+  if (!STATIC_DIR) return notFound();
+  const { pathname } = new URL(req.url);
+
+  const target = resolveWithin(STATIC_DIR, pathname);
+  if (target) {
+    const asset = await serveFile(target, req, { cacheControl: ASSET_CACHE_CONTROL });
+    if (asset) return asset;
+  }
+  const shell = await serveFile(path.join(STATIC_DIR, 'index.html'), req, { cacheControl: SHELL_CACHE_CONTROL });
+  return shell ?? notFound();
+}
 
 initDb();
 
-app.listen(PORT, () => {
-  console.log(`🎵 Spindle running on http://localhost:${PORT}`);
+const server = Bun.serve({
+  port: PORT,
+  // Nothing here accepts an upload, so a small ceiling is plenty.
+  maxRequestBodySize: 1024 * 1024,
+  routes: wrapRoutes({
+    '/api/tracks': { GET: listTracks },
+    '/api/tracks/:id': { GET: getTrack },
+    '/api/tracks/:id/lyrics': { GET: getTrackLyrics },
+    '/api/tracks/:id/like': { PUT: setTrackLiked },
+
+    '/api/albums': { GET: listAlbums },
+    '/api/albums/:id': { GET: getAlbum },
+    '/api/albums/:id/tracks': { GET: getAlbumTracks },
+
+    '/api/artists': { GET: listArtists },
+    '/api/artists/:id': { GET: getArtist },
+    '/api/artists/:id/albums': { GET: getArtistAlbums },
+
+    '/api/playlists': { GET: listPlaylists, POST: createPlaylist },
+    '/api/playlists/:id': { GET: getPlaylist },
+    '/api/playlists/:id/tracks': { POST: addPlaylistTrack },
+
+    '/api/stats/most-played': { GET: mostPlayed },
+    '/api/stats/recently-played': { GET: recentlyPlayed },
+    '/api/stats/recently-added': { GET: recentlyAdded },
+    '/api/stats/play': { POST: postPlay },
+    '/api/stats/play/complete': { POST: postPlayComplete },
+
+    '/api/settings': { GET: getSettings, PUT: updateSettings },
+
+    '/api/stream/:id': { GET: streamTrack },
+
+    '/api/sync/start': { POST: startSync },
+    '/api/sync/status': { GET: syncStatus },
+    '/api/sync/progress/:jobId': { GET: syncProgress },
+
+    // `?w=` renditions are keyed on a single filename segment; the wildcard
+    // below still serves the nested variant directories on disk.
+    '/art/:file': { GET: serveArtFile },
+    '/art/*': serveArt,
+    // Unknown API paths must stay JSON: serving the SPA shell here would mask
+    // typos and break clients that expect to parse the body.
+    '/api/*': () => notFound(),
+    '/*': serveSpa
+  }),
+  error(err: Error) {
+    console.error(err.stack || err);
+    return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' }
+    });
+  }
 });
+
+console.log(`🎵 Spindle running on http://localhost:${server.port}`);
+
+// Without this the container would rely on SIGKILL after the stop timeout,
+// leaving the WAL un-checkpointed on every restart.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    server.stop(true);
+    process.exit(0);
+  });
+}

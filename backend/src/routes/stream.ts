@@ -1,24 +1,20 @@
-import express from 'express';
-import fs from 'node:fs';
 import path from 'node:path';
-import { pipeline } from 'node:stream';
-import { getDb } from '../db/init.js';
+import { getDb } from '../db/init.ts';
+import { fail } from '../http/respond.ts';
 
-const router = express.Router();
-
-// pipeline() (unlike .pipe()) destroys the file stream when either side
-// errors or the client disconnects, so a vanished file or an aborted request
-// can't crash the process or leak an fd. Premature closes are routine
-// (seeking, tab close) and not worth logging.
-function sendStream(readStream: fs.ReadStream, res: express.Response): void {
-  pipeline(readStream, res, (err) => {
-    if (!err) return;
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ERR_STREAM_PREMATURE_CLOSE' || (err as { message?: string }).message === 'aborted') return;
-    console.warn('[stream] pipeline error:', err.message);
-  });
-}
-
+/**
+ * Audio streaming, with range handling done by hand.
+ *
+ * Bun applies automatic range handling to any file-backed response, but it is
+ * not sufficient here, in four measured ways: it ignores `If-Range`, so a client
+ * resuming a partial download whose file has changed gets fresh bytes spliced
+ * onto its stale copy; it ignores `If-None-Match`, answering 200 where a 304 is
+ * due; it answers a multi-range request with the whole body; and it treats a
+ * malformed `bytes=-` as a request for everything rather than a 416.
+ *
+ * Setting `Content-Range` ourselves suppresses that layer, so every 206 and 416
+ * below takes effect as written.
+ */
 const MIME: Record<string, string> = {
   '.mp3':  'audio/mpeg',
   '.m4a':  'audio/mp4',
@@ -31,34 +27,23 @@ const MIME: Record<string, string> = {
   '.aiff': 'audio/aiff'
 };
 
-router.get('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const row = getDb()
-    .prepare<[number]>('SELECT file_path FROM tracks WHERE id = ?')
-    .get(id) as { file_path: string } | undefined;
-  if (!row) {
-    res.status(404).json({ error: 'Track not found' });
-    return;
-  }
+export async function streamTrack(req: Request & { params: { id: string } }): Promise<Response> {
+  const row = getDb().query('SELECT file_path FROM tracks WHERE id = ?')
+    .get(Number(req.params.id)) as { file_path: string } | null;
+  if (!row) return fail('Track not found', 404);
 
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(row.file_path);
-  } catch {
-    res.status(410).json({ error: 'File missing on disk; re-sync required' });
-    return;
-  }
+  const file = Bun.file(row.file_path);
+  if (!(await file.exists())) return fail('File missing on disk; re-sync required', 410);
 
-  const total = stat.size;
-  const ext = path.extname(row.file_path).toLowerCase();
-  const contentType = MIME[ext] || 'application/octet-stream';
+  const total = file.size;
+  const contentType = MIME[path.extname(row.file_path).toLowerCase()] || 'application/octet-stream';
 
-  // Cacheable responses let the browser reuse preloaded/buffered bytes
-  // instead of re-fetching on every seek or element swap. The ETag is
-  // derived from size+mtime, so a re-synced file invalidates immediately.
-  const etag = `"${total}-${Math.floor(stat.mtimeMs)}"`;
-  const lastModified = stat.mtime.toUTCString();
-  const commonHeaders = {
+  // Cacheable responses let the browser reuse preloaded/buffered bytes instead
+  // of re-fetching on every seek or element swap. The ETag is derived from
+  // size+mtime, so a re-synced file invalidates immediately.
+  const etag = `"${total}-${Math.floor(file.lastModified)}"`;
+  const lastModified = new Date(file.lastModified).toUTCString();
+  const common = {
     'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'private, max-age=3600',
@@ -66,60 +51,83 @@ router.get('/:id', (req, res) => {
     'Last-Modified': lastModified
   };
 
-  if (req.headers['if-none-match'] === etag) {
+  if (req.headers.get('if-none-match') === etag) {
     // 304 must resend validators/caching headers so the cached entry's
     // freshness lifetime is refreshed (RFC 9110 §15.4.5).
-    res.writeHead(304, {
-      'Cache-Control': commonHeaders['Cache-Control'],
-      ETag: etag,
-      'Last-Modified': lastModified
+    return new Response(null, {
+      status: 304,
+      headers: { 'Cache-Control': common['Cache-Control'], ETag: etag, 'Last-Modified': lastModified }
     });
-    res.end();
-    return;
   }
 
-  // Honor If-Range: when the validator no longer matches, ranges against the
-  // client's stale copy would splice mismatched bytes — send the full file.
-  const ifRange = req.headers['if-range'];
-  const rangeIsValid = !ifRange || ifRange === etag || ifRange === lastModified;
+  const range = req.headers.get('range');
+  if (!range) {
+    return new Response(file, { headers: { ...common, 'Content-Length': String(total) } });
+  }
 
-  const range = req.headers.range;
-  if (!range || !rangeIsValid) {
-    res.writeHead(200, {
-      ...commonHeaders,
-      'Content-Length': total
-    });
-    sendStream(fs.createReadStream(row.file_path), res);
-    return;
+  // Honour If-Range: when the validator no longer matches, ranges against the
+  // client's stale copy would splice mismatched bytes — send the whole file.
+  const ifRange = req.headers.get('if-range');
+  if (ifRange && ifRange !== etag && ifRange !== lastModified) {
+    return fullBodyDespiteRange(file, common);
   }
 
   const match = /bytes=(\d*)-(\d*)/.exec(range);
-  if (!match || (!match[1] && !match[2])) {
-    res.status(416).set('Content-Range', `bytes */${total}`).end();
-    return;
-  }
+  if (!match || (!match[1] && !match[2])) return unsatisfiable(total);
+
   let start: number;
   let end: number;
   if (!match[1]) {
     // Suffix range (bytes=-N): the LAST N bytes of the file.
-    const suffixLength = parseInt(match[2], 10);
-    start = Math.max(0, total - suffixLength);
+    start = Math.max(0, total - parseInt(match[2], 10));
     end = total - 1;
   } else {
     start = parseInt(match[1], 10);
     end = match[2] ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
   }
-  if (start > end || start >= total) {
-    res.status(416).set('Content-Range', `bytes */${total}`).end();
-    return;
-  }
+  if (start > end || start >= total) return unsatisfiable(total);
 
-  res.writeHead(206, {
-    ...commonHeaders,
-    'Content-Length': end - start + 1,
-    'Content-Range': `bytes ${start}-${end}/${total}`
+  return new Response(file.slice(start, end + 1), {
+    status: 206,
+    headers: {
+      ...common,
+      'Content-Length': String(end - start + 1),
+      'Content-Range': `bytes ${start}-${end}/${total}`
+    }
   });
-  sendStream(fs.createReadStream(row.file_path, { start, end }), res);
-});
+}
 
-export default router;
+/**
+ * 416 carries only the unsatisfied-range indicator. The representation headers
+ * are deliberately omitted, matching what this endpoint has always sent: the
+ * response describes the *request's* failure, not the resource.
+ */
+function unsatisfiable(total: number): Response {
+  return new Response(null, {
+    status: 416,
+    headers: { 'Content-Range': `bytes */${total}` }
+  });
+}
+
+/**
+ * Serve the whole file even though the request carried a Range header.
+ *
+ * A file-backed body would be converted to a 206 by Bun's automatic range
+ * handling, and the only header that suppresses it — `Content-Range` — is
+ * forbidden on a 200 by RFC 9110 §14.4. Pumping the file through a stream
+ * bypasses that layer at the cost of chunked transfer encoding, so this one
+ * response has no `Content-Length`. It is reached only when a client resumes a
+ * partial download whose validator has since changed.
+ */
+function fullBodyDespiteRange(file: Bun.BunFile, common: Record<string, string>): Response {
+  const reader = file.stream().getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      controller.enqueue(value);
+    },
+    cancel() { void reader.cancel(); }
+  });
+  return new Response(body, { headers: common });
+}

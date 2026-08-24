@@ -1,15 +1,16 @@
 {
   "name": "spindle",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "license": "MIT",
+  "workspaces": ["backend", "frontend"],
   "scripts": {
-    "dev": "pnpm -r --parallel run dev",
-    "dev:backend": "pnpm --filter backend run dev",
-    "dev:frontend": "pnpm --filter frontend run dev",
-    "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck"
-  },
-  "packageManager": "pnpm@9.0.0"
+    "dev": "bun run --parallel --filter '*' dev",
+    "dev:backend": "bun run --filter backend dev",
+    "dev:frontend": "bun run --filter frontend dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter backend test"
+  }
 }

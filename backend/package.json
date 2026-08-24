@@ -1,32 +1,21 @@
 {
   "name": "backend",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node --enable-source-maps dist/index.js",
-    "build": "tsc -p tsconfig.json && cp src/db/schema.sql dist/db/schema.sql && rm -rf dist/db/migrations && cp -r src/db/migrations dist/db/migrations",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "dev": "bun --watch src/index.ts",
+    "start": "bun --no-env-file dist/index.js",
+    "build": "bun build src/index.ts --target=bun --outdir dist --sourcemap",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "glob": "^11.0.0",
-    "morgan": "^1.10.0",
-    "music-metadata": "^10.6.4",
-    "sharp": "^0.33.5"
+    "music-metadata": "^10.6.4"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
-    "@types/morgan": "^1.9.9",
-    "@types/node": "^22.7.4",
-    "tsx": "^4.19.1",
+    "@types/bun": "^1.4.0",
     "typescript": "^5.7.2"
   }
 }
