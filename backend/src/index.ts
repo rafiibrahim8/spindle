@@ -12,6 +12,7 @@ import { getSettings, updateSettings } from './routes/settings.ts';
 import { mostPlayed, postPlay, postPlayComplete, recentlyAdded, recentlyPlayed } from './routes/stats.ts';
 import { serveArtFile } from './routes/art.ts';
 import { streamTrack } from './routes/stream.ts';
+import { startSync, syncProgress, syncStatus } from './routes/sync.ts';
 import { getTrack, getTrackLyrics, listTracks, setTrackLiked } from './routes/tracks.ts';
 
 /** Art filenames are content hashes, so a given URL's bytes can never change. */
@@ -88,6 +89,10 @@ const server = Bun.serve({
     '/api/settings': { GET: getSettings, PUT: updateSettings },
 
     '/api/stream/:id': { GET: streamTrack },
+
+    '/api/sync/start': { POST: startSync },
+    '/api/sync/status': { GET: syncStatus },
+    '/api/sync/progress/:jobId': { GET: syncProgress },
 
     // `?w=` renditions are keyed on a single filename segment; the wildcard
     // below still serves the nested variant directories on disk.

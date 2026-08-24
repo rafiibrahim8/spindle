@@ -1,29 +1,26 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseFile, type IPicture } from 'music-metadata';
-import sharp from 'sharp';
-import type { TrackMeta } from '../types.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = process.env.DATA_ROOT || path.join(__dirname, '../../data');
-const ART_CACHE_DIR = path.join(DATA_ROOT, 'art');
+import { ART_CACHE_DIR } from '../env.ts';
+import type { TrackMeta } from '../types.ts';
 
 const PARTIAL_HASH_BYTES = 64 * 1024;
 
 fs.mkdirSync(ART_CACHE_DIR, { recursive: true });
 
+/**
+ * sha256 of a file's first 64 KiB.
+ *
+ * This value is persisted in tracks.file_hash and drives the sync pipeline's
+ * skip-vs-reextract decision, so it must keep producing exactly what the
+ * node:crypto implementation produced — otherwise the next sync re-reads tags
+ * for the entire library. test/hash.test.ts checks all 536 rows against the
+ * live database.
+ */
 export async function partialHash(filePath: string): Promise<string> {
-  const handle = await fsp.open(filePath, 'r');
-  try {
-    const buf = Buffer.alloc(PARTIAL_HASH_BYTES);
-    const { bytesRead } = await handle.read(buf, 0, PARTIAL_HASH_BYTES, 0);
-    return crypto.createHash('sha256').update(buf.subarray(0, bytesRead)).digest('hex');
-  } finally {
-    await handle.close();
-  }
+  const bytes = await Bun.file(filePath).slice(0, PARTIAL_HASH_BYTES).bytes();
+  return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
 }
 
 export async function extractMetadata(filePath: string): Promise<TrackMeta> {
@@ -65,7 +62,7 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
   const unsyncedText = extractUnsyncedFromTags(meta);
 
   let resolvedSynced = syncedLrc;
-  let resolvedUnsynced = unsyncedText;
+  const resolvedUnsynced = unsyncedText;
 
   if (!resolvedSynced) {
     const sidecar = await readSidecarLrc(filePath);
@@ -107,10 +104,7 @@ export async function extractMetadata(filePath: string): Promise<TrackMeta> {
  * a Vorbis comment key here and an ID3 frame id in MP3s, and neither surfaces
  * as a common field.
  */
-function readNativeTag(
-  meta: Awaited<ReturnType<typeof parseFile>>,
-  wanted: string
-): string | null {
+function readNativeTag(meta: Awaited<ReturnType<typeof parseFile>>, wanted: string): string | null {
   const target = wanted.toUpperCase();
   for (const frames of Object.values(meta.native || {})) {
     for (const frame of frames) {
@@ -129,27 +123,38 @@ function readNativeTag(
 
 function pickFrontCover(pics: IPicture[] | undefined): IPicture | null {
   if (!pics || !pics.length) return null;
-  const front = pics.find((p) =>
-    typeof p.type === 'string' && /front|cover/i.test(p.type)
-  );
+  const front = pics.find((p) => typeof p.type === 'string' && /front|cover/i.test(p.type));
   return front || pics[0];
 }
 
+/**
+ * Cache one cover as WebP, bounded to 500px.
+ *
+ * Keyed on the picture bytes (not the track hash) so identical embedded art
+ * across an album is encoded exactly once and every track shares the file. The
+ * name is that sha256, which is also what makes the existing cache reusable —
+ * see test/hash.test.ts.
+ *
+ * `fit: 'inside'` bounds both axes without distorting. sharp's `cover` used to
+ * center-crop to an exact square, which Bun.Image cannot do — it has no crop
+ * operation at all. The frontend renders art in fixed square boxes with
+ * `object-fit: cover`, so the crop simply happens in the browser instead and
+ * the result on screen is unchanged.
+ */
 async function cacheAlbumArt(picture: IPicture): Promise<string> {
-  // Key the cache on the picture bytes themselves (not the track hash), so
-  // identical embedded art across an album is encoded by sharp exactly once
-  // and every track shares the same cached file.
-  const hash = crypto.createHash('sha256').update(picture.data).digest('hex');
+  const hash = new Bun.CryptoHasher('sha256').update(picture.data).digest('hex');
   const filename = `${hash}.webp`;
   const target = path.join(ART_CACHE_DIR, filename);
   if (fs.existsSync(target)) return `/art/${filename}`;
   try {
-    await sharp(picture.data)
-      .resize(500, 500, { fit: 'cover' })
+    await new Bun.Image(picture.data)
+      .resize(500, 500, { fit: 'inside' })
       .webp({ quality: 85 })
-      .toFile(target);
+      .write(target);
     return `/art/${filename}`;
   } catch (err) {
+    // Bun.Image decodes JPEG, PNG, WebP, GIF and BMP on Linux; TIFF and the
+    // HEIC/AVIF family are rejected with ERR_IMAGE_FORMAT_UNSUPPORTED.
     console.warn(`[metadata] art cache failed for ${hash}:`, (err as Error).message);
     return '';
   }
@@ -230,10 +235,6 @@ function pad2(n: number): string {
 async function readSidecarLrc(filePath: string): Promise<string | null> {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath, path.extname(filePath));
-  const candidate = path.join(dir, `${base}.lrc`);
-  try {
-    return await fsp.readFile(candidate, 'utf8');
-  } catch {
-    return null;
-  }
+  const candidate = Bun.file(path.join(dir, `${base}.lrc`));
+  return (await candidate.exists()) ? candidate.text() : null;
 }

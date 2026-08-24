@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import { getDb, prepared } from '../db/init.js';
-import type { SyncEvent, SyncResult, TrackMeta } from '../types.js';
-import { extractMetadata, partialHash } from './metadata.js';
-import { upsertLyrics } from './lyrics.js';
-import { scanDirectory } from './scanner.js';
+import { getDb, prepared } from '../db/init.ts';
+import type { SyncEvent, SyncResult, TrackMeta } from '../types.ts';
+import { extractMetadata, partialHash } from './metadata.ts';
+import { upsertLyrics } from './lyrics.ts';
+import { scanDirectory } from './scanner.ts';
 
 interface JobRecord {
   id: string;
@@ -233,10 +233,10 @@ async function runSync(rootDir: string, record: JobRecord, force = false): Promi
   // a large sync never starves concurrent requests (especially audio
   // streams). Trade-off vs. one big transaction: a crash mid-persist leaves a
   // partially synced library, which the next sync repairs.
-  const touchStmt = db.prepare(
+  const touchStmt = db.query(
     'UPDATE tracks SET file_mtime = ?, file_size = ?, last_scanned = ? WHERE id = ?'
   );
-  const deleteStmt = db.prepare('DELETE FROM tracks WHERE id = ?');
+  const deleteStmt = db.query('DELETE FROM tracks WHERE id = ?');
   const touchedAt = Date.now();
 
   const persistOps: Array<() => void> = [
@@ -444,7 +444,7 @@ function upsertArtist(name: string): number {
   if (cached !== undefined) return cached;
 
   const db = getDb();
-  const existing = prepared(db, 'SELECT id FROM artists WHERE name = ?').get(name) as { id: number } | undefined;
+  const existing = prepared(db, 'SELECT id FROM artists WHERE name = ?').get(name) as { id: number } | null;
   const id = existing
     ? existing.id
     : Number(prepared(db, 'INSERT INTO artists(name) VALUES(?)').run(name).lastInsertRowid);
@@ -474,7 +474,7 @@ function upsertAlbum(
   const existing = prepared(
     db,
     'SELECT id, art_path FROM albums WHERE title = ? AND (artist_id IS ? OR artist_id = ?)'
-  ).get(title, artistId, artistId) as { id: number; art_path: string | null } | undefined;
+  ).get(title, artistId, artistId) as { id: number; art_path: string | null } | null;
   if (existing) {
     let hasArt = Boolean(existing.art_path);
     if (artPath && !hasArt) {
@@ -515,20 +515,20 @@ async function refreshSmartPlaylists(): Promise<void> {
   const db = getDb();
 
   const ensure = (smartKey: string, name: string): number => {
-    const bySmartKey = db.prepare<[string]>('SELECT id FROM playlists WHERE smart_key = ?');
+    const bySmartKey = db.query('SELECT id FROM playlists WHERE smart_key = ?');
     // ON CONFLICT(name) DO NOTHING: a user-created playlist may already own
     // this name (playlists.name is UNIQUE) — don't let that abort the sync.
-    const insert = db.prepare(
+    const insert = db.query(
       'INSERT INTO playlists(name, read_only, smart_key) VALUES(?, 1, ?) ON CONFLICT(name) DO NOTHING'
     );
-    let row = bySmartKey.get(smartKey) as { id: number } | undefined;
+    let row = bySmartKey.get(smartKey) as { id: number } | null;
     if (row) return row.id;
     insert.run(name, smartKey);
-    row = bySmartKey.get(smartKey) as { id: number } | undefined;
+    row = bySmartKey.get(smartKey) as { id: number } | null;
     if (row) return row.id;
     // Name taken by a non-smart playlist — retry with a disambiguating suffix.
     insert.run(`${name} (Smart)`, smartKey);
-    row = bySmartKey.get(smartKey) as { id: number } | undefined;
+    row = bySmartKey.get(smartKey) as { id: number } | null;
     if (!row) throw new Error(`Could not create smart playlist "${name}" (name conflict)`);
     return row.id;
   };
@@ -537,8 +537,8 @@ async function refreshSmartPlaylists(): Promise<void> {
   // with an event-loop yield between playlists so a rebuild across many
   // genres doesn't block concurrent requests.
   const populate = db.transaction((playlistId: number, trackIds: number[]): void => {
-    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistId);
-    const insert = db.prepare('INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES(?, ?, ?)');
+    db.query('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistId);
+    const insert = db.query('INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES(?, ?, ?)');
     trackIds.forEach((trackId, index) => insert.run(playlistId, trackId, index));
   });
 
@@ -546,7 +546,7 @@ async function refreshSmartPlaylists(): Promise<void> {
   const recentAddedId = ensure('recently-added', 'Recently Added');
   const neverPlayedId = ensure('never-played', 'Never Played');
 
-  const top25 = db.prepare(`
+  const top25 = db.query(`
     SELECT t.id FROM tracks t
     JOIN play_stats s ON s.track_id = t.id
     ORDER BY s.play_count DESC, s.last_played DESC
@@ -556,13 +556,13 @@ async function refreshSmartPlaylists(): Promise<void> {
   await yieldToEventLoop();
 
   const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const recent = db.prepare<[number]>(`
+  const recent = db.query(`
     SELECT id FROM tracks WHERE date_added >= ? ORDER BY date_added DESC
   `).all(thirtyDaysAgo) as Array<{ id: number }>;
   populate(recentAddedId, recent.map((r) => r.id));
   await yieldToEventLoop();
 
-  const never = db.prepare(`
+  const never = db.query(`
     SELECT t.id FROM tracks t
     LEFT JOIN play_stats s ON s.track_id = t.id
     WHERE COALESCE(s.play_count, 0) = 0
@@ -585,7 +585,7 @@ async function refreshSmartPlaylists(): Promise<void> {
     const smartKey = `genre:${genre.toLowerCase()}`;
     const playlistId = ensure(smartKey, `All ${genre}`);
     const tracks = db
-      .prepare<[string]>('SELECT id FROM tracks WHERE genre = ? COLLATE NOCASE ORDER BY title')
+      .query('SELECT id FROM tracks WHERE genre = ? COLLATE NOCASE ORDER BY title')
       .all(genre) as Array<{ id: number }>;
     populate(playlistId, tracks.map((r) => r.id));
     await yieldToEventLoop();
