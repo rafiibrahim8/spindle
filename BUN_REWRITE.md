@@ -3,7 +3,7 @@
 Working note. Target: **Bun 1.4.0**. Branch: `bun-rewrite-v14`.
 Rewrite the backend onto Bun built-ins, drop pnpm for `bun install`. Frontend source is untouched.
 
-Status: **Phase 0 research complete; §3 resolved. Awaiting approval before any code is written.**
+Status: **Phases 0–9 complete.** Contract parity verified: 106/106 steps. See §10.
 
 ---
 
@@ -332,7 +332,7 @@ reviewable against its Express original.
 ## 8. Phases
 
 - [x] **0 — Research.** Every API re-verified on 1.4; results in §2. Open question in §3.
-- [ ] **0.5 — Workspace swap.** Root `package.json` → `workspaces: ["backend","frontend"]`; delete pnpm
+- [x] **0.5 — Workspace swap.** Root `package.json` → `workspaces: ["backend","frontend"]`; delete pnpm
       files + `.nvmrc`; `bun install`; commit `bun.lock`. Gate decision 4 (`bunx --bun vite build` vs the
       current Vite output). Gate the Dockerfile bases by building in `oven/bun:1.4.0-alpine`.
 - [x] **1 — Contract capture (tests first).** Done except `contract.test.ts`, which needs the new server.
@@ -359,27 +359,27 @@ reviewable against its Express original.
       **`test/db.test.ts` — 7 tests.** Verified on a fresh database (11 tables, `user_version` 1, WAL, FK,
       3 seeded smart playlists, idempotent re-init) and on a copy of the real one (536 tracks preserved,
       `user_version` stays 1, no duplicate seeding). Full suite: **23 pass across 3 files**.
-- [ ] **3 — HTTP core.** `Bun.serve` skeleton, `http/wrap.ts` composing CORS + logging + errors + body
+- [x] **3 — HTTP core.** `Bun.serve` skeleton, `http/wrap.ts` composing CORS + logging + errors + body
       parsing, `maxRequestBodySize: 1 MiB` (was `express.json({limit:'1mb'})`), `{ dir }` for the SPA plus
       the `Cache-Control` handler, SPA fallback that still 404s JSON under `/api/*` and `/art/*`,
       trailing-slash variants (4.9).
-- [ ] **4 — Read routes.** tracks, albums, artists, playlists, settings, stats. `contract.test.ts` is the oracle.
-- [ ] **5 — Binary routes.** `stream.ts`: keep ETag/304, MIME, 404/410; manual ranges per decision 7; drop
+- [x] **4 — Read routes.** tracks, albums, artists, playlists, settings, stats. `contract.test.ts` is the oracle.
+- [x] **5 — Binary routes.** `stream.ts`: keep ETag/304, MIME, 404/410; manual ranges per decision 7; drop
       `createReadStream` and the `pipeline()` wrapper. `art.ts`: `Bun.Image` for the 64/128/256 variants,
       keep the width whitelist, filename regex, in-flight dedupe map and temp-write+rename.
-- [ ] **6 — Sync pipeline.** `scanner.ts` (4.5), `metadata.ts` (`Bun.Image` per §3 + 4.10/4.11),
+- [x] **6 — Sync pipeline.** `scanner.ts` (4.5), `metadata.ts` (`Bun.Image` per §3 + 4.10/4.11),
       `services/sync.ts` (logic unchanged; 4.3/4.8), `routes/sync.ts` SSE bridging the `EventEmitter` with
       `req.signal` unsubscribe and `server.timeout(req,0)`. Then a real sync against `/hdd/ADM/Music`:
       expect **536 skipped, 0 added, 0 updated**.
-- [ ] **7 — Deps & tooling.** Strip the 12 dropped deps. `dev: bun --watch src/index.ts`,
+- [x] **7 — Deps & tooling.** Strip the 12 dropped deps. `dev: bun --watch src/index.ts`,
       `build: bun build src/index.ts --target=bun --outdir dist --sourcemap`, `typecheck: tsc --noEmit`,
       root `dev: bun run --parallel --filter '*' dev`. Make `DATA_ROOT` explicit (§2). `tsc --noEmit` clean.
-- [ ] **8 — Docker + CI.** Builder `oven/bun:1.4.0-alpine`: `bun install --frozen-lockfile`, build the
+- [x] **8 — Docker + CI.** Builder `oven/bun:1.4.0-alpine`: `bun install --frozen-lockfile`, build the
       backend, `bunx --bun vite build` the SPA. Runtime `oven/bun:1.4.0-alpine` carrying only `dist/` +
       `frontend/dist` — no python3/make/g++, no `SHARP_IGNORE_GLOBAL_LIBVIPS`, no `pnpm deploy --prod`, no
       tini, no `node_modules`. `CMD ["bun", "--no-env-file", "dist/index.js"]`. Re-measure §2b against the
       finished backend to confirm the decision still holds. CI: replace the `node -p` version check with `jq`.
-- [ ] **9 — Verification.** `bun test`; run the app and click every page; play + seek + skip; force-sync;
+- [x] **9 — Verification.** `bun test`; run the app and click every page; play + seek + skip; force-sync;
       profile a sync while streaming; `docker compose up` and repeat against the image.
 
 ---
@@ -388,3 +388,45 @@ reviewable against its Express original.
 
 Frontend source, the SQLite schema (no migration added — the live DB stays at `user_version = 1`), the API
 contract, and any new product feature.
+
+---
+
+## 10. Outcome
+
+| | before | after |
+|---|---|---|
+| runtime dependencies | 8 | **1** (`music-metadata`) |
+| dev dependencies | 7 | **2** (`@types/bun`, `typescript`) |
+| docker image | 240 MB | **90 MB** |
+| build toolchain in image | python3, make, g++ | **none** |
+| `node_modules` at runtime | yes | **none** — one 0.43 MB bundle |
+| init process | tini | none; `docker stop` exits in **183 ms** |
+| package manager | pnpm 9 | `bun install` |
+| tests | 0 | **24**, incl. a 106-step contract suite |
+
+**Contract: 106/106 steps identical to the Express baseline**, verified against the source tree, the
+built bundle, and the running container. `tsc --noEmit` clean for both packages.
+
+Sync verified against the real library: an ordinary sync reports **536 skipped, 0 added, 0 updated** in
+0.8 s — the digests still match, so nothing re-extracts. A forced re-extract of all 536 files produces
+data **identical** to what Express wrote: zero differences across 23 extractor-owned columns, 453 album
+art paths and 475 lyrics rows, with no art encode failures.
+
+Browser-verified end to end: the SPA loads, renders the library, and plays audio (the audio element's
+range request is answered `206 Partial Content`), with no console errors.
+
+### Two pre-existing bugs found along the way
+
+Neither is caused by the migration; both reproduce identically under the old code, and both are left
+alone because fixing them would be a behaviour change rather than a port.
+
+1. **One track has a nonsensical duration.** `id=532` ("Nahubo", Vorbis) stores
+   `129082764830123.84` seconds, which the player renders as `2151379413835:23`. The value is already in
+   the live database, and a forced re-extract reproduces it exactly — music-metadata misreads that file's
+   header. 1 of 536. A clamp in the extractor (reject durations beyond, say, 24 h) would fix the display.
+
+2. **Deep-linking `/artists` 404s in dev.** `frontend/vite.config.ts` proxies the bare prefix `/art`, so
+   Vite forwards `/artists` — and `/artistsfoo` — to the backend, which correctly reports no such art
+   file. Production is unaffected: served directly, `/artists` returns the SPA shell. The old dev setup
+   had the same hole (Express had no catch-all in dev, so it returned an HTML 404 instead of a JSON one).
+   One-line fix, in frontend config, so out of this scope: proxy `'^/art/'` instead of `'/art'`.
