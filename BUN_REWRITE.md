@@ -430,3 +430,67 @@ alone because fixing them would be a behaviour change rather than a port.
    file. Production is unaffected: served directly, `/artists` returns the SPA shell. The old dev setup
    had the same hole (Express had no catch-all in dev, so it returned an HTML 404 instead of a JSON one).
    One-line fix, in frontend config, so out of this scope: proxy `'^/art/'` instead of `'/art'`.
+
+---
+
+## 11. Why the range handling stays manual
+
+Revisited after the port, with the question: does the frontend actually need any of it, and can Bun do
+it natively now?
+
+### What the browser actually sends
+
+Chrome 151 against the real backend, logged server-side. Three requests per track, **all open-ended**:
+
+```
+GET /api/stream/365   Range: bytes=0-         -> 206  6846727 bytes
+GET /api/stream/365   Range: bytes=6750208-   -> 206    96519 bytes   (tail, for duration)
+GET /api/stream/365   Range: bytes=1048576-   -> 206  6155264 bytes
+```
+
+No multi-range, no suffix `bytes=-N`, no malformed range, no `If-Range`, and no `If-None-Match` — the
+`max-age=3600` keeps the response fresh within a session. So the multi-range, malformed-range and
+`If-Range` branches are defensive parity, not features this frontend exercises.
+
+### What Bun 1.4 can do natively — measured, because the docs conflate the two paths
+
+| | handler + `Bun.file()` | native `{ dir }` | this code |
+|---|---|---|---|
+| 206 open-ended / suffix / explicit | ✅ | ✅ | ✅ |
+| 416 unsatisfiable | ✅ | ✅ | ✅ |
+| ETag + Last-Modified | ❌ **emits none** | ✅ weak | ✅ strong |
+| 304 on `If-None-Match` | ❌ | ✅ | ✅ |
+| 304 on `If-Modified-Since` | ❌ | ✅ | ❌ (dead branch: an ETag is always sent) |
+| honours `If-Range` | ❌ | ❌ | ✅ |
+| multi-range → 206 first range | ❌ 200 | ❌ 200 | ✅ |
+| malformed `bytes=-` → 416 | ❌ 200 | ❌ 200 | ✅ |
+| `Cache-Control` | ✅ ours | ❌ **impossible** | ✅ |
+
+`DirectoryRouteOptions` is exactly `{ dir, statCache }` — no header hook — and `ServeOptions` has no
+global response hook, so a `{ dir }` route cannot carry `Cache-Control`.
+
+**That is the bind, and it is the stutter-relevant one.** The two headers that stop the player
+re-fetching — `Cache-Control: private, max-age=3600` and a 304 on revalidation — cannot both come from
+either native path. `{ dir }` supplies validators and 304 but forbids `Cache-Control`; the handler path
+supplies `Cache-Control` but emits no validators at all, leaving nothing for a 304 to compare. Delegating
+would mean giving up either "don't re-fetch on seek and element swap" or cheap revalidation — and a
+revalidation miss re-downloads several megabytes of audio.
+
+The same holds for `/art`: `{ dir }` would drop `immutable` on content-hashed filenames, putting a
+revalidation round-trip in front of every thumbnail while a list scrolls, which is the pressure the `?w=`
+renditions exist to relieve.
+
+### `file.slice()` costs nothing
+
+An initial 30-round probe suggested slicing the whole file was ~0.85 ms slower at p50 than handing Bun the
+unsliced file, which would have mattered because `bytes=0-` is how every track starts. A 150-round
+interleaved A/B did not reproduce it:
+
+| variant (Range: bytes=0-, 7.6 MB) | p50 | p90 | mean | min |
+|---|---|---|---|---|
+| always slice (shipped) | 1.89 | 4.64 | 2.47 | 0.76 |
+| whole-file fast path | 2.04 | 4.80 | 2.67 | 0.81 |
+| Bun native slicing | 1.92 | 4.33 | 2.40 | 0.70 |
+
+Indistinguishable; the first result was noise. A fast path was written, measured, and reverted — Bun
+serves a sliced file-backed blob as efficiently as the whole file, so the branch bought nothing.
