@@ -1,5 +1,5 @@
 import { getDb } from '../db/init.ts';
-import { fail, json } from '../http/respond.ts';
+import { fail, json, noContent } from '../http/respond.ts';
 import { readJson } from '../http/wrap.ts';
 import { markPlayCompleted, recordPlay } from '../services/stats.ts';
 
@@ -53,7 +53,7 @@ export async function postPlay(req: Request): Promise<Response> {
   if (!exists) return fail('Track not found', 404);
 
   recordPlay(trackId);
-  return json({ ok: true });
+  return noContent();
 }
 
 export async function postPlayComplete(req: Request): Promise<Response> {
@@ -62,7 +62,7 @@ export async function postPlayComplete(req: Request): Promise<Response> {
   if (!trackId) return fail('trackId is required', 400);
 
   markPlayCompleted(trackId);
-  return json({ ok: true });
+  return noContent();
 }
 
 function clampLimit(value: unknown, fallback: number): number {

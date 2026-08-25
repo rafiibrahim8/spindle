@@ -53,7 +53,7 @@ export const api = {
   getLyrics(id: number): Promise<Lyrics> {
     return request(`/tracks/${id}/lyrics`);
   },
-  setTrackLiked(id: number, liked: boolean): Promise<{ id: number; liked: boolean }> {
+  setTrackLiked(id: number, liked: boolean): Promise<void> {
     return request(`/tracks/${id}/like`, { method: 'PUT', body: JSON.stringify({ liked }) });
   },
 
@@ -90,7 +90,7 @@ export const api = {
   createPlaylist(name: string): Promise<{ id: number; name: string }> {
     return request('/playlists', { method: 'POST', body: JSON.stringify({ name }) });
   },
-  addTrackToPlaylist(id: number, trackId: number): Promise<{ ok: boolean }> {
+  addTrackToPlaylist(id: number, trackId: number): Promise<void> {
     return request(`/playlists/${id}/tracks`, {
       method: 'POST',
       body: JSON.stringify({ trackId })
@@ -107,13 +107,13 @@ export const api = {
   getRecentlyAdded(limit = 25): Promise<{ tracks: Track[] }> {
     return request(`/stats/recently-added?limit=${limit}`);
   },
-  recordPlay(trackId: number): Promise<{ ok: boolean }> {
+  recordPlay(trackId: number): Promise<void> {
     return request('/stats/play', {
       method: 'POST',
       body: JSON.stringify({ trackId })
     });
   },
-  markPlayCompleted(trackId: number): Promise<{ ok: boolean }> {
+  markPlayCompleted(trackId: number): Promise<void> {
     return request('/stats/play/complete', {
       method: 'POST',
       body: JSON.stringify({ trackId })
