@@ -107,7 +107,7 @@ async function runSync(rootDir: string, record: JobRecord, force = false): Promi
   // hash-check before paying the cost of a full metadata parse.
   const existing = new Map<string, { id: number; mtime: number; hash: string; size: number }>();
   const existingRows = db
-    .prepare('SELECT id, file_path, file_mtime, file_hash, file_size FROM tracks')
+    .query('SELECT id, file_path, file_mtime, file_hash, file_size FROM tracks')
     .all() as Array<{ id: number; file_path: string; file_mtime: number; file_hash: string; file_size: number }>;
   for (const row of existingRows) {
     existing.set(row.file_path, {
@@ -511,7 +511,7 @@ function writeLyrics(trackId: number, meta: TrackMeta): void {
 
 function upsertSetting(key: string, value: string): void {
   getDb()
-    .prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .query('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, value);
 }
 
@@ -579,7 +579,7 @@ async function refreshSmartPlaylists(): Promise<void> {
   // "Rock" and "rock" share one playlist; MIN(genre) picks a stable display
   // spelling.
   const genres = db
-    .prepare(`
+    .query(`
       SELECT MIN(genre) AS genre FROM tracks
       WHERE genre IS NOT NULL AND genre <> ''
       GROUP BY genre COLLATE NOCASE
