@@ -21,9 +21,9 @@ let latestRunningJobId: string | null = null;
 
 /**
  * Yield to the event loop between batches of synchronous work. Everything in
- * this process — including in-flight audio streams — shares one event loop,
- * and better-sqlite3 is synchronous; a single monolithic persist over a large
- * library used to block stream delivery long enough to stutter playback.
+ * this process — including in-flight audio streams — shares one event loop, and
+ * SQLite writes are synchronous, so a single monolithic persist over a large
+ * library blocks stream delivery long enough to stutter playback.
  */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 const PERSIST_CHUNK_SIZE = 200;
@@ -460,7 +460,11 @@ function upsertAlbum(
   artPath: string | null
 ): number {
   const db = getDb();
-  const key = `${artistId ?? ''} ${title}`;
+  // The separator is a NUL so a title containing it cannot forge another
+  // artist's key. Written as an escape rather than embedded literally: a raw
+  // NUL makes the file read as binary, and tools that skip binary files then
+  // pass over it in silence.
+  const key = `${artistId ?? ''}\0${title}`;
   const cached = albumCacheByKey.get(key);
   if (cached) {
     // First track of the album may lack embedded art; later ones can fill it.
