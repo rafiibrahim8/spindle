@@ -3,13 +3,11 @@
  *
  * Routes are plain values, so anything that must apply to all of them is
  * applied once, here. Doing it centrally is what stops a new route from quietly
- * shipping without CORS headers or logging.
+ * shipping without error handling or logging.
  *
  * Order: the handler runs, any error it throws becomes the JSON error shape,
- * CORS headers go on whatever response resulted, and the request is logged last
- * so the line carries the final status.
+ * and the request is logged last so the line carries the final status.
  */
-import { applyCors, preflight } from './cors.ts';
 import { logRequest } from './log.ts';
 import { fail } from './respond.ts';
 
@@ -27,18 +25,11 @@ function decorate(handler: Handler): Handler {
   return async (req, server) => {
     const started = performance.now();
     let res: Response;
-    const isPreflight = req.method === 'OPTIONS';
     try {
-      // `cors` answered preflights before any route ran, so OPTIONS never
-      // reaches a handler here either.
-      res = isPreflight ? preflight(req) : await handler(req, server);
+      res = await handler(req, server);
     } catch (err) {
       res = errorResponse(err);
     }
-    // preflight() already emits the full CORS set, including a Vary that names
-    // Access-Control-Request-Headers; re-applying the generic headers here
-    // would overwrite that with a bare "Origin".
-    if (!isPreflight) applyCors(res.headers);
     logRequest(req.method, req.url, res.status, performance.now() - started, res.headers.get('content-length'));
     return res;
   };
@@ -53,9 +44,6 @@ export function wrapRoutes<T extends Record<string, RouteValue>>(routes: T): T {
     }
     const methods: Record<string, Handler> = {};
     for (const [method, handler] of Object.entries(value)) methods[method] = decorate(handler);
-    // A route object only answers the methods it lists, so preflight needs an
-    // explicit entry or OPTIONS would 404.
-    methods.OPTIONS ??= decorate(() => new Response(null, { status: 204 }));
     wrapped[pattern] = methods;
   }
   // The decorator preserves each entry's shape, which the signature asserts so
