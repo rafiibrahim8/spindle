@@ -1,5 +1,5 @@
 import { getDb } from '../db/init.ts';
-import { fail, json } from '../http/respond.ts';
+import { created, fail, json, noContent } from '../http/respond.ts';
 import { readJson } from '../http/wrap.ts';
 
 export function listPlaylists(): Response {
@@ -38,7 +38,8 @@ export async function createPlaylist(req: Request): Promise<Response> {
   if (!name) return fail('name is required', 400);
   try {
     const result = getDb().query('INSERT INTO playlists(name, read_only) VALUES(?, 0)').run(name);
-    return json({ id: Number(result.lastInsertRowid), name });
+    const id = Number(result.lastInsertRowid);
+    return created({ id, name }, `/api/playlists/${id}`);
   } catch (err) {
     // playlists.name is UNIQUE; the constraint text is the response body, as
     // it was before.
@@ -68,5 +69,5 @@ export async function addPlaylistTrack(req: Request & { params: { id: string } }
   db.query('INSERT OR IGNORE INTO playlist_tracks(playlist_id, track_id, position) VALUES(?, ?, ?)')
     .run(playlistId, trackId, nextPos);
 
-  return json({ ok: true });
+  return noContent();
 }

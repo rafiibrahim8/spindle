@@ -1,5 +1,5 @@
 import { getDb } from '../db/init.ts';
-import { fail, json } from '../http/respond.ts';
+import { fail, json, noContent } from '../http/respond.ts';
 import { readJson } from '../http/wrap.ts';
 import { getLyrics } from '../services/lyrics.ts';
 
@@ -110,7 +110,7 @@ export async function setTrackLiked(req: Request & { params: { id: string } }): 
 
   db.query('UPDATE tracks SET liked = ?, liked_at = ? WHERE id = ?')
     .run(liked ? 1 : 0, liked ? Date.now() : null, id);
-  return json({ id, liked });
+  return noContent();
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -21,7 +21,6 @@ export const DB_PATH = path.join(DATA_ROOT, 'db', 'music.db');
 export const ART_CACHE_DIR = path.join(DATA_ROOT, 'art');
 
 export const PORT = Number(process.env.PORT) || 3001;
-export const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5174';
 
 /**
  * Where the built SPA lives. Unset in dev — Vite serves the app on its own port

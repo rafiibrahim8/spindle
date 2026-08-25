@@ -21,9 +21,9 @@ let latestRunningJobId: string | null = null;
 
 /**
  * Yield to the event loop between batches of synchronous work. Everything in
- * this process — including in-flight audio streams — shares one event loop,
- * and better-sqlite3 is synchronous; a single monolithic persist over a large
- * library used to block stream delivery long enough to stutter playback.
+ * this process — including in-flight audio streams — shares one event loop, and
+ * SQLite writes are synchronous, so a single monolithic persist over a large
+ * library blocks stream delivery long enough to stutter playback.
  */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 const PERSIST_CHUNK_SIZE = 200;
@@ -107,7 +107,7 @@ async function runSync(rootDir: string, record: JobRecord, force = false): Promi
   // hash-check before paying the cost of a full metadata parse.
   const existing = new Map<string, { id: number; mtime: number; hash: string; size: number }>();
   const existingRows = db
-    .prepare('SELECT id, file_path, file_mtime, file_hash, file_size FROM tracks')
+    .query('SELECT id, file_path, file_mtime, file_hash, file_size FROM tracks')
     .all() as Array<{ id: number; file_path: string; file_mtime: number; file_hash: string; file_size: number }>;
   for (const row of existingRows) {
     existing.set(row.file_path, {
@@ -460,7 +460,11 @@ function upsertAlbum(
   artPath: string | null
 ): number {
   const db = getDb();
-  const key = `${artistId ?? ''} ${title}`;
+  // The separator is a NUL so a title containing it cannot forge another
+  // artist's key. Written as an escape rather than embedded literally: a raw
+  // NUL makes the file read as binary, and tools that skip binary files then
+  // pass over it in silence.
+  const key = `${artistId ?? ''}\0${title}`;
   const cached = albumCacheByKey.get(key);
   if (cached) {
     // First track of the album may lack embedded art; later ones can fill it.
@@ -507,7 +511,7 @@ function writeLyrics(trackId: number, meta: TrackMeta): void {
 
 function upsertSetting(key: string, value: string): void {
   getDb()
-    .prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .query('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, value);
 }
 
@@ -575,7 +579,7 @@ async function refreshSmartPlaylists(): Promise<void> {
   // "Rock" and "rock" share one playlist; MIN(genre) picks a stable display
   // spelling.
   const genres = db
-    .prepare(`
+    .query(`
       SELECT MIN(genre) AS genre FROM tracks
       WHERE genre IS NOT NULL AND genre <> ''
       GROUP BY genre COLLATE NOCASE

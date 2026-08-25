@@ -13,6 +13,22 @@ export function json(data: unknown, status = 200, extraHeaders?: Bun.HeadersInit
   return new Response(JSON.stringify(data), { status, headers });
 }
 
+/**
+ * A resource was created. The body carries its server-assigned identity, which
+ * the caller had no way to know, and Location points at it.
+ */
+export function created(data: unknown, location: string): Response {
+  return json(data, 201, { Location: location });
+}
+
+/**
+ * A mutation that succeeded and has nothing to say. 204 carries no body, so
+ * callers must not try to parse one.
+ */
+export function noContent(): Response {
+  return new Response(null, { status: 204 });
+}
+
 /** The error body shape every failing endpoint uses: `{ "error": "..." }`. */
 export function fail(message: string, status: number): Response {
   return json({ error: message }, status);
